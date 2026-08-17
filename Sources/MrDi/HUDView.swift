@@ -15,7 +15,6 @@ final class HUDModel: ObservableObject {
     @Published var justSaved = false
     @Published var seenCount = 0
     @Published var listenHint = ""
-    @Published var alternativeHint: String?
 }
 
 /// Панель всплывает поверх произвольного контента — чаще всего поверх тёмного видео.
@@ -180,12 +179,6 @@ struct HUDView: View {
                                 .lineLimit(3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                    }
-                }
-                if let hint = model.alternativeHint {
-                    HStack(spacing: 6) {
-                        key("⇥", hint)
-                        Spacer(minLength: 0)
                     }
                 }
                 footer

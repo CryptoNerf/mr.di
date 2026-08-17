@@ -17,12 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let listenSeconds: Double = 15
     private var dictationStart: Date?
     private var dictationLatched = false
+    private var dictationLocale = "en-US"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         _ = Store.shared          // открыть базу и домигрировать схему заранее,
         HUDController.shared.warmUp()   // чтобы первый же перевод не ждал диск
         registerHotkeys()
+        HotkeySettings.shared.onChange = { [weak self] in self?.registerHotkeys() }
         ScreenCapture.prewarm()
 
         SystemAudioRecorder.shared.onStop = { [weak self] error in
@@ -60,11 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(to: menu, title: "Перевести область экрана", key: "s", action: #selector(lookupScreenRegion))
         add(to: menu, title: "Переснять ту же область", key: "r", action: #selector(repeatLastRegion))
         add(to: menu, title: "Что прозвучало только что", key: "a", action: #selector(listenBack))
-        add(to: menu, title: "Сказать слово в микрофон", key: "v", action: #selector(dictationPressed))
+        add(to: menu, title: "Сказать по-английски", key: "", action: #selector(dictateEnglish))
+        add(to: menu, title: "Сказать по-русски", key: "", action: #selector(dictateRussian))
         menu.addItem(.separator())
         listenItem = add(to: menu, title: "Слушать системный звук", key: "", action: #selector(toggleListening))
         loginItem = add(to: menu, title: "Запускать при входе", key: "", action: #selector(toggleLoginItem))
         menu.addItem(.separator())
+        add(to: menu, title: "Сочетания клавиш…", key: "", action: #selector(openSettings))
         add(to: menu, title: "Как пользоваться", key: "", action: #selector(openWordList))
         add(to: menu, title: "Доступ к Универсальному доступу…", key: "", action: #selector(openAccessibilitySettings))
         menu.addItem(.separator())
@@ -91,14 +95,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Хоткеи
 
     private func registerHotkeys() {
-        HotkeyManager.shared.register(.optionSpace) { [weak self] in self?.lookupSelection() }
-        HotkeyManager.shared.register(.optionD) { [weak self] in self?.openWordList() }
-        HotkeyManager.shared.register(.optionS) { [weak self] in self?.lookupScreenRegion() }
-        HotkeyManager.shared.register(.optionR) { [weak self] in self?.repeatLastRegion() }
-        HotkeyManager.shared.register(.optionA) { [weak self] in self?.listenBack() }
-        HotkeyManager.shared.register(.optionV,
-                                      onPress: { [weak self] in self?.dictationPressed() },
-                                      onRelease: { [weak self] in self?.dictationReleased() })
+        let settings = HotkeySettings.shared
+        HotkeyManager.shared.replaceAll([
+            (settings.shortcut(for: .lookupSelection), { [weak self] in self?.lookupSelection() }, nil),
+            (settings.shortcut(for: .openDictionary), { [weak self] in self?.openWordList() }, nil),
+            (settings.shortcut(for: .screenRegion), { [weak self] in self?.lookupScreenRegion() }, nil),
+            (settings.shortcut(for: .repeatRegion), { [weak self] in self?.repeatLastRegion() }, nil),
+            (settings.shortcut(for: .listenBack), { [weak self] in self?.listenBack() }, nil),
+            (settings.shortcut(for: .voiceEnglish),
+             { [weak self] in self?.dictationPressed(locale: "en-US") },
+             { [weak self] in self?.dictationReleased() }),
+            (settings.shortcut(for: .voiceRussian),
+             { [weak self] in self?.dictationPressed(locale: "ru-RU") },
+             { [weak self] in self?.dictationReleased() })
+        ])
     }
 
     @objc private func lookupSelection() {
@@ -121,53 +131,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Микрофон
 
-    /// ⌥V работает двумя способами сразу: зажать и говорить, либо коротко нажать,
-    /// сказать и нажать ещё раз. Угадывать, какой из них имел в виду пользователь,
-    /// не нужно — решает длительность удержания.
-    @objc private func dictationPressed() {
+    /// Сочетание работает двумя способами сразу: зажать и говорить, либо коротко
+    /// нажать, сказать и нажать ещё раз. Угадывать, какой из них имел в виду
+    /// пользователь, не нужно — решает длительность удержания.
+    private func dictationPressed(locale: String) {
         if MicRecorder.shared.isRecording {
             if dictationLatched { finishDictation() }
             return
         }
-        startDictation()
+        startDictation(locale: locale)
     }
 
     private func dictationReleased() {
         guard MicRecorder.shared.isRecording, let start = dictationStart else { return }
         if Date().timeIntervalSince(start) < 0.4 {
             dictationLatched = true
-            HUDController.shared.updateListening(hint: "⌥V — закончить, ␛ — отменить")
+            HUDController.shared.updateListening(hint: "\(voiceStopHint) — закончить, ␛ — отменить")
         } else {
             finishDictation()
         }
     }
 
-    private func startDictation() {
+    private var voiceStopHint: String {
+        HotkeySettings.shared.shortcut(for: dictationLocale == "ru-RU" ? .voiceRussian : .voiceEnglish).display
+    }
+
+    private func startDictation(locale: String) {
         guard MicRecorder.hasMicrophoneAccess, Transcriber.isAuthorized else {
             Task {
                 _ = await MicRecorder.requestMicrophoneAccess()
                 _ = await Transcriber.requestAuthorization()
-                HUDController.shared.showMessage("Разрешите микрофон и распознавание речи, затем нажмите ⌥V ещё раз")
+                HUDController.shared.showMessage("Разрешите микрофон и распознавание речи, затем нажмите ещё раз")
             }
             return
         }
 
+        dictationLocale = locale
         dictationStart = Date()
         dictationLatched = false
-        HUDController.shared.showListening(hint: "Скажите слово по-английски или по-русски, затем отпустите ⌥V")
+        let language = locale == "ru-RU" ? "по-русски" : "по-английски"
+        HUDController.shared.showListening(hint: "Говорите \(language), затем отпустите клавиши")
         MicRecorder.shared.onPartial = { partial in
             HUDController.shared.updateListening(partial)
         }
 
         do {
-            try MicRecorder.shared.start()
+            try MicRecorder.shared.start(locale: locale)
         } catch {
             HUDController.shared.showMessage(error.localizedDescription)
             return
         }
 
         // предохранитель на случай потерянного события отпускания клавиши
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
             guard MicRecorder.shared.isRecording else { return }
             self?.finishDictation()
         }
@@ -179,21 +195,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HUDController.shared.updateListening(hint: "Распознаю…")
 
         Task {
-            let hypotheses = await MicRecorder.shared.stop()
+            let text = await MicRecorder.shared.stop()
             dictationLatched = false
             dictationStart = nil
-            guard let best = hypotheses.first else {
-                HUDController.shared.showMessage("Не расслышал — удерживайте ⌥V и произнесите слово чётче")
+            guard !text.isEmpty else {
+                HUDController.shared.showMessage("Не расслышал — попробуйте ещё раз, ближе к микрофону")
                 return
             }
-            // вторую версию отдаём в подсказку: если язык угадан неверно,
-            // ⇥ переключит на неё, не заставляя диктовать заново
-            let alternative = hypotheses.dropFirst().first.map {
-                Capture(text: $0.text, context: nil, sourceApp: "Микрофон")
-            }
             HUDController.shared.lookup(
-                Capture(text: best.text, context: nil, sourceApp: "Микрофон"),
-                mode: "voice", anchor: anchor, alternative: alternative)
+                Capture(text: text, context: nil, sourceApp: "Микрофон"),
+                mode: "voice", anchor: anchor)
         }
     }
 
@@ -343,6 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         reviewItem?.title = due > 0 ? "Повторение — \(due)" : "Повторение…"
         loginItem?.state = LoginItem.isEnabled ? .on : .off
         listenItem?.state = SystemAudioRecorder.shared.isRunning ? .on : .off
+    }
+
+    @objc private func dictateEnglish() { dictationPressed(locale: "en-US") }
+    @objc private func dictateRussian() { dictationPressed(locale: "ru-RU") }
+
+    @objc private func openSettings() {
+        HUDController.shared.hide()
+        SettingsWindow.shared.show()
     }
 
     @objc private func openAccessibilitySettings() {

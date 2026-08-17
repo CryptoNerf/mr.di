@@ -1,49 +1,49 @@
-import AppKit
 import AVFoundation
 import Speech
 
 /// Диктовка с микрофона с живой расшифровкой.
 ///
-/// Слово распознаётся **сразу двумя** распознавателями — английским и русским —
-/// на одном и том же звуке. Спрашивать у пользователя язык заранее нельзя:
-/// он для того и говорит, что слова не знает.
+/// Язык задаётся сочетанием клавиш, а не угадывается: на слух автоматика ошибается
+/// слишком часто, особенно на наборе слов, и лишнее нажатие оказывается дешевле
+/// неверного языка.
 ///
-/// Победитель выбирается не по уверенности распознавания: на устройстве она почти
-/// всегда приходит нулевой и ничего не различает. Решает то, получилось ли **настоящее
-/// слово** своего языка — это проверяется системным словарём орфографии. Чужой язык
-/// на незнакомой речи выдаёт бессмыслицу («собака» → «so back a»), и она отсеивается.
-///
-/// Слова показываются прямо во время речи: незнакомое слово обычно произносят
-/// неуверенно, и увидеть, что именно расслышал распознаватель, важнее, чем ждать
-/// финального результата.
+/// Отдельная забота — режим «нажал, сказал, нажал ещё раз». `SFSpeechRecognizer`
+/// сам закрывает сессию, услышав тишину, и весь звук после этого уходит в никуда.
+/// Поэтому закрытую сессию мы молча открываем заново и продолжаем слушать,
+/// накапливая уже распознанное.
 @MainActor
 final class MicRecorder {
     static let shared = MicRecorder()
 
-    private final class Channel {
-        let locale: String
-        let request: SFSpeechAudioBufferRecognitionRequest
-        var task: SFSpeechRecognitionTask?
-        var text = ""
-        var confidence = 0.0
-        var isFinished = false
+    /// Ответвление звука в текущую сессию распознавания.
+    /// Живёт отдельным объектом, потому что сессия меняется, а звуковой поток — нет.
+    private final class AudioSink: @unchecked Sendable {
+        private var request: SFSpeechAudioBufferRecognitionRequest?
+        private let lock = NSLock()
 
-        init(locale: String, request: SFSpeechAudioBufferRecognitionRequest) {
-            self.locale = locale
-            self.request = request
+        func swap(_ new: SFSpeechAudioBufferRecognitionRequest?) {
+            lock.lock(); request = new; lock.unlock()
+        }
+
+        func append(_ buffer: AVAudioPCMBuffer) {
+            lock.lock(); let current = request; lock.unlock()
+            current?.append(buffer)
         }
     }
 
-    private static let locales = ["en-US", "ru-RU"]
+    private static let maximumRestarts = 20
 
     private let engine = AVAudioEngine()
-    private var channels: [Channel] = []
+    private let sink = AudioSink()
+
+    private var recognizer: SFSpeechRecognizer?
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
     private var finalContinuation: ResumeOnceVoid?
 
-    struct Hypothesis {
-        let text: String
-        let locale: String
-    }
+    private var settled = ""     // текст уже закрывшихся сессий
+    private var current = ""     // текст текущей сессии
+    private var restarts = 0
 
     private(set) var isRecording = false
     var onPartial: ((String) -> Void)?
@@ -58,66 +58,53 @@ final class MicRecorder {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
-    func start() throws {
+    var transcript: String {
+        (settled + " " + current).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func start(locale: String) throws {
         guard !isRecording else { return }
         guard Transcriber.isAuthorized else { throw TranscribeError.notAuthorized }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+              recognizer.isAvailable
+        else { throw TranscribeError.unavailable }
 
-        channels = Self.locales.compactMap { locale -> Channel? in
-            guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
-                  recognizer.isAvailable
-            else { return nil }
+        self.recognizer = recognizer
+        settled = ""
+        current = ""
+        restarts = 0
+        startSession()
 
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            request.shouldReportPartialResults = true
-            request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-            request.addsPunctuation = true
-
-            let channel = Channel(locale: locale, request: request)
-            channel.task = recognizer.recognitionTask(with: request) { [weak self, weak channel] result, error in
-                Task { @MainActor in
-                    guard let self, let channel else { return }
-                    self.handle(result: result, error: error, channel: channel)
-                }
-            }
-            return channel
-        }
-        guard !channels.isEmpty else { throw TranscribeError.unavailable }
-
-        let requests = channels.map(\.request)
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
-            for request in requests { request.append(buffer) }
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [sink] buffer, _ in
+            sink.append(buffer)
         }
         engine.prepare()
         try engine.start()
         isRecording = true
     }
 
-    /// Останавливает запись и отдаёт расшифровки, лучшая первой.
-    /// Второй вариант нужен живым: ни одна эвристика не угадывает язык всегда,
-    /// и у пользователя должна остаться возможность переключиться одной клавишей.
-    func stop() async -> [Hypothesis] {
-        guard isRecording else { return [] }
+    func stop() async -> String {
+        guard isRecording else { return "" }
         isRecording = false
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        channels.forEach { $0.request.endAudio() }
+        sink.swap(nil)
+        request?.endAudio()
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let box = ResumeOnceVoid(continuation)
             finalContinuation = box
-            // распознавание могло не успеть отдать финальный результат —
-            // тогда берём накопленное, оно почти всегда то же самое
+            // финального результата ждём недолго: он почти всегда совпадает
+            // с последним частичным, который уже накоплен
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { box.finish() }
         }
 
-        let result = ranked().map {
-            Hypothesis(text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), locale: $0.locale)
-        }
+        let text = transcript
         cleanup()
-        return result.filter { !$0.text.isEmpty }
+        return text
     }
 
     func cancel() {
@@ -125,96 +112,71 @@ final class MicRecorder {
         isRecording = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        channels.forEach { $0.request.endAudio() }
+        sink.swap(nil)
+        request?.endAudio()
         finalContinuation?.finish()
         cleanup()
     }
 
-    // MARK: - Разбор результатов
+    // MARK: - Сессии распознавания
 
-    private func handle(result: SFSpeechRecognitionResult?, error: Error?, channel: Channel) {
+    private func startSession() {
+        guard let recognizer else { return }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        request.addsPunctuation = true
+        request.taskHint = .dictation
+
+        self.request = request
+        current = ""
+        sink.swap(request)
+
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor in self?.handle(result: result, error: error) }
+        }
+    }
+
+    private func handle(result: SFSpeechRecognitionResult?, error: Error?) {
         if let result {
-            channel.text = result.bestTranscription.formattedString
-            channel.confidence = Self.averageConfidence(result.bestTranscription)
-            if result.isFinal { channel.isFinished = true }
-            if isRecording { onPartial?(bestPartial()) }
+            current = result.bestTranscription.formattedString
+            if isRecording { onPartial?(transcript) }
         }
-        if error != nil { channel.isFinished = true }
 
-        if !isRecording, channels.allSatisfy(\.isFinished) {
+        let sessionEnded = (result?.isFinal ?? false) || error != nil
+        guard sessionEnded else { return }
+
+        guard isRecording else {
             finalContinuation?.finish()
+            return
         }
-    }
 
-    private func bestPartial() -> String {
-        ranked().first?.text ?? ""
-    }
+        // пользователь ещё держит запись — распознаватель закрылся сам, по тишине.
+        // Сохраняем услышанное и открываем новую сессию, не прерывая записи.
+        settled = transcript
+        current = ""
+        task?.cancel()
+        task = nil
 
-    /// Порядок предпочтения, по убыванию важности:
-    ///
-    /// 1. доля настоящих слов — отсеивает «резильенс» на месте `resilience`;
-    /// 2. меньше слов — русское слово, услышанное английским распознавателем,
-    ///    распадается на несколько коротких, но настоящих слов («собака» → «so back a»),
-    ///    и на первом критерии выходит ничья;
-    /// 3. уверенность — на устройстве она почти всегда нулевая и вдобавок несравнима
-    ///    между двумя разными моделями, поэтому стоит после смысловых признаков;
-    /// 4. английский — основное направление приложения.
-    ///
-    /// На разборе типовых случаев это даёт верный язык почти всегда. Неразрешимой
-    /// остаётся честная омонимия вроде «мама»/«mama» — для неё есть ⇥.
-    private func ranked() -> [Channel] {
-        let candidates = channels.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
-        return candidates.sorted { lhs, rhs in
-            let known = (Self.knownWordRatio(lhs), Self.knownWordRatio(rhs))
-            if let l = known.0, let r = known.1, abs(l - r) > 0.01 { return l > r }
-
-            let words = (Self.wordCount(lhs.text), Self.wordCount(rhs.text))
-            if words.0 != words.1 { return words.0 < words.1 }
-
-            if abs(lhs.confidence - rhs.confidence) > 0.02 { return lhs.confidence > rhs.confidence }
-            return lhs.locale.hasPrefix("en")
+        restarts += 1
+        guard restarts <= Self.maximumRestarts else {
+            NSLog("[mrdi] распознавание перезапускалось слишком часто, останавливаюсь")
+            sink.swap(nil)
+            return
         }
-    }
-
-    /// Доля слов, которые системный словарь орфографии считает существующими.
-    /// nil — словаря этого языка в системе нет, и критерий пропускается,
-    /// иначе язык без словаря проигрывал бы всегда.
-    private static func knownWordRatio(_ channel: Channel) -> Double? {
-        let language = String(channel.locale.prefix(2))
-        guard spellCheckerSupports(language) else { return nil }
-
-        let words = channel.text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.map(String.init)
-        guard !words.isEmpty else { return 0 }
-
-        let known = words.filter { word in
-            NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0, language: language,
-                                                wrap: false, inSpellDocumentWithTag: 0,
-                                                wordCount: nil).location == NSNotFound
-        }
-        return Double(known.count) / Double(words.count)
-    }
-
-    private static func spellCheckerSupports(_ language: String) -> Bool {
-        NSSpellChecker.shared.availableLanguages.contains {
-            $0 == language || $0.hasPrefix(language + "_") || $0.hasPrefix(language + "-")
-        }
-    }
-
-    private static func wordCount(_ text: String) -> Int {
-        text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.count
-    }
-
-    private static func averageConfidence(_ transcription: SFTranscription) -> Double {
-        let segments = transcription.segments
-        guard !segments.isEmpty else { return 0 }
-        return segments.reduce(0.0) { $0 + Double($1.confidence) } / Double(segments.count)
+        startSession()
     }
 
     private func cleanup() {
-        channels.forEach { $0.task?.cancel() }
-        channels.removeAll()
+        task?.cancel()
+        task = nil
+        request = nil
+        recognizer = nil
         finalContinuation = nil
         onPartial = nil
+        settled = ""
+        current = ""
     }
 }
 

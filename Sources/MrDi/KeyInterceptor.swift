@@ -83,5 +83,4 @@ enum KeyCode {
     static let ret: Int64 = 36
     static let keypadEnter: Int64 = 76
     static let p: Int64 = 35
-    static let tab: Int64 = 48
 }

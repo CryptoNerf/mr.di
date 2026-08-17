@@ -7,54 +7,57 @@ import Carbon.HIToolbox
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
-    struct Combo {
-        var keyCode: UInt32
-        var modifiers: UInt32
-        static let optionSpace = Combo(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
-        static let optionS = Combo(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(optionKey))
-        static let optionV = Combo(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey))
-        static let optionD = Combo(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(optionKey))
-        static let optionR = Combo(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey))
-        static let optionA = Combo(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(optionKey))
+    private struct Registration {
+        let ref: EventHotKeyRef
+        let onPress: () -> Void
+        let onRelease: (() -> Void)?
     }
 
-    private var pressHandlers: [UInt32: () -> Void] = [:]
-    private var releaseHandlers: [UInt32: () -> Void] = [:]
-    private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var registrations: [UInt32: Registration] = [:]
     private var nextID: UInt32 = 1
     private var installed = false
 
     private init() {}
 
-    @discardableResult
-    func register(_ combo: Combo, handler: @escaping () -> Void) -> Bool {
-        register(combo, onPress: handler, onRelease: nil)
+    /// Перерегистрация: старые сочетания снимаются, новые ставятся.
+    /// Нужна каждый раз, когда пользователь меняет сочетание в настройках.
+    func replaceAll(_ bindings: [(shortcut: Shortcut, onPress: () -> Void, onRelease: (() -> Void)?)]) {
+        unregisterAll()
+        for binding in bindings {
+            register(binding.shortcut, onPress: binding.onPress, onRelease: binding.onRelease)
+        }
     }
 
-    /// С обработчиком отпускания получается «зажал и говори»:
-    /// Carbon умеет отдавать оба события для одного и того же сочетания.
     @discardableResult
-    func register(_ combo: Combo, onPress: @escaping () -> Void, onRelease: (() -> Void)?) -> Bool {
+    func register(_ shortcut: Shortcut,
+                  onPress: @escaping () -> Void,
+                  onRelease: (() -> Void)? = nil) -> Bool {
         installHandlerIfNeeded()
         let id = nextID
         nextID += 1
 
         var ref: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: OSType(0x564F4342 /* VOCB */), id: id)
-        let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, hotKeyID,
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4D524449 /* MRDI */), id: id)
+        let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, hotKeyID,
                                          GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let ref else {
-            NSLog("[mrdi] не удалось зарегистрировать хоткей (код \(status))")
+            NSLog("[mrdi] не удалось зарегистрировать \(shortcut.display) (код \(status))")
             return false
         }
-        pressHandlers[id] = onPress
-        releaseHandlers[id] = onRelease
-        refs[id] = ref
+        registrations[id] = Registration(ref: ref, onPress: onPress, onRelease: onRelease)
         return true
     }
 
+    func unregisterAll() {
+        for registration in registrations.values {
+            UnregisterEventHotKey(registration.ref)
+        }
+        registrations.removeAll()
+    }
+
     fileprivate func fire(_ id: UInt32, pressed: Bool) {
-        if pressed { pressHandlers[id]?() } else { releaseHandlers[id]?() }
+        guard let registration = registrations[id] else { return }
+        if pressed { registration.onPress() } else { registration.onRelease?() }
     }
 
     private func installHandlerIfNeeded() {
