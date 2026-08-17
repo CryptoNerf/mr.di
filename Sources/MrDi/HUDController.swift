@@ -18,6 +18,8 @@ final class HUDController {
     private var anchor: NSPoint = .zero
     private var lastTranscript: String?
     private var lookupTask: Task<Void, Never>?
+    private var currentCapture: (capture: Capture, mode: String)?
+    private var alternativeCapture: Capture?
 
     private var offscreenOrigin: NSPoint { NSPoint(x: -panelWidth - 80, y: 0) }
 
@@ -63,6 +65,9 @@ final class HUDController {
             case KeyCode.p:
                 DispatchQueue.main.async { self.speakCurrent() }
                 return true
+            case KeyCode.tab where self.alternativeCapture != nil:
+                DispatchQueue.main.async { self.switchToAlternative() }
+                return true
             default:
                 return false
             }
@@ -95,9 +100,17 @@ final class HUDController {
                mode: "audio", anchor: NSPoint(x: panel.frame.minX + 30, y: panel.frame.maxY))
     }
 
-    func lookup(_ capture: Capture, mode: String, anchor: NSPoint? = nil) {
+    /// `alternative` — вторая версия того же самого, обычно расшифровка на другом языке.
+    /// Переключение на неё висит на ⇥: никакая эвристика не угадывает язык всегда,
+    /// и у пользователя должен остаться способ поправить её одной клавишей.
+    func lookup(_ capture: Capture, mode: String, anchor: NSPoint? = nil, alternative: Capture? = nil) {
         warmUp()
         setInteractive(false)
+        currentCapture = (capture, mode)
+        alternativeCapture = alternative
+        model.alternativeHint = alternative.map {
+            Direction.detect($0.text) == .ruToEn ? "я сказал по-русски" : "я сказал по-английски"
+        }
         current = nil
         model.justSaved = false
         model.state = .loading(capture.text)
@@ -146,6 +159,7 @@ final class HUDController {
         hideWorkItem?.cancel()
         current = nil
         model.listenHint = hint
+        model.alternativeHint = nil
         model.state = .listening("")
         show(at: NSEvent.mouseLocation)
     }
@@ -159,6 +173,7 @@ final class HUDController {
         warmUp()
         setInteractive(false)
         current = nil
+        model.alternativeHint = nil
         model.state = .loading(text)
         show(at: anchor)
     }
@@ -167,6 +182,8 @@ final class HUDController {
         warmUp()
         setInteractive(false)
         current = nil
+        model.alternativeHint = nil
+        alternativeCapture = nil
         model.state = .error(text)
         show(at: nil)
         scheduleAutoHide(after: 4)
@@ -217,6 +234,11 @@ final class HUDController {
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.hide() } }
         hideWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
+    }
+
+    private func switchToAlternative() {
+        guard let alternative = alternativeCapture, let previous = currentCapture else { return }
+        lookup(alternative, mode: previous.mode, anchor: anchor, alternative: previous.capture)
     }
 
     private func speakCurrent() {

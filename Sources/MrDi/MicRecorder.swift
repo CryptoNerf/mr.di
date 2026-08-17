@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Speech
 
@@ -5,8 +6,12 @@ import Speech
 ///
 /// Слово распознаётся **сразу двумя** распознавателями — английским и русским —
 /// на одном и том же звуке. Спрашивать у пользователя язык заранее нельзя:
-/// он для того и говорит, что слова не знает. Победитель выбирается по уверенности
-/// распознавания, а направление перевода дальше выводится из алфавита результата.
+/// он для того и говорит, что слова не знает.
+///
+/// Победитель выбирается не по уверенности распознавания: на устройстве она почти
+/// всегда приходит нулевой и ничего не различает. Решает то, получилось ли **настоящее
+/// слово** своего языка — это проверяется системным словарём орфографии. Чужой язык
+/// на незнакомой речи выдаёт бессмыслицу («собака» → «so back a»), и она отсеивается.
 ///
 /// Слова показываются прямо во время речи: незнакомое слово обычно произносят
 /// неуверенно, и увидеть, что именно расслышал распознаватель, важнее, чем ждать
@@ -33,7 +38,12 @@ final class MicRecorder {
 
     private let engine = AVAudioEngine()
     private var channels: [Channel] = []
-    private var finalContinuation: ResumeOnceString?
+    private var finalContinuation: ResumeOnceVoid?
+
+    struct Hypothesis {
+        let text: String
+        let locale: String
+    }
 
     private(set) var isRecording = false
     var onPartial: ((String) -> Void)?
@@ -84,27 +94,30 @@ final class MicRecorder {
         isRecording = true
     }
 
-    /// Останавливает запись и отдаёт лучшую из двух расшифровок.
-    func stop() async -> String {
-        guard isRecording else { return "" }
+    /// Останавливает запись и отдаёт расшифровки, лучшая первой.
+    /// Второй вариант нужен живым: ни одна эвристика не угадывает язык всегда,
+    /// и у пользователя должна остаться возможность переключиться одной клавишей.
+    func stop() async -> [Hypothesis] {
+        guard isRecording else { return [] }
         isRecording = false
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         channels.forEach { $0.request.endAudio() }
 
-        let text = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
-            let box = ResumeOnceString(continuation)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let box = ResumeOnceVoid(continuation)
             finalContinuation = box
             // распознавание могло не успеть отдать финальный результат —
-            // тогда берём лучшее из накопленного, оно почти всегда то же самое
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                box.finish(self?.bestText() ?? "")
-            }
+            // тогда берём накопленное, оно почти всегда то же самое
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { box.finish() }
         }
 
+        let result = ranked().map {
+            Hypothesis(text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines), locale: $0.locale)
+        }
         cleanup()
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.filter { !$0.text.isEmpty }
     }
 
     func cancel() {
@@ -113,7 +126,7 @@ final class MicRecorder {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         channels.forEach { $0.request.endAudio() }
-        finalContinuation?.finish("")
+        finalContinuation?.finish()
         cleanup()
     }
 
@@ -129,28 +142,66 @@ final class MicRecorder {
         if error != nil { channel.isFinished = true }
 
         if !isRecording, channels.allSatisfy(\.isFinished) {
-            finalContinuation?.finish(bestText())
+            finalContinuation?.finish()
         }
     }
 
-    /// Во время речи уверенность ещё не заполнена, поэтому показываем просто
-    /// самую содержательную из двух версий.
     private func bestPartial() -> String {
-        channels.map(\.text).max { $0.count < $1.count } ?? ""
+        ranked().first?.text ?? ""
     }
 
-    /// Победитель по уверенности; при близких значениях — тот, кто расслышал больше.
-    private func bestText() -> String {
+    /// Порядок предпочтения, по убыванию важности:
+    ///
+    /// 1. доля настоящих слов — отсеивает «резильенс» на месте `resilience`;
+    /// 2. меньше слов — русское слово, услышанное английским распознавателем,
+    ///    распадается на несколько коротких, но настоящих слов («собака» → «so back a»),
+    ///    и на первом критерии выходит ничья;
+    /// 3. уверенность — на устройстве она почти всегда нулевая и вдобавок несравнима
+    ///    между двумя разными моделями, поэтому стоит после смысловых признаков;
+    /// 4. английский — основное направление приложения.
+    ///
+    /// На разборе типовых случаев это даёт верный язык почти всегда. Неразрешимой
+    /// остаётся честная омонимия вроде «мама»/«mama» — для неё есть ⇥.
+    private func ranked() -> [Channel] {
         let candidates = channels.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard !candidates.isEmpty else { return "" }
+        return candidates.sorted { lhs, rhs in
+            let known = (Self.knownWordRatio(lhs), Self.knownWordRatio(rhs))
+            if let l = known.0, let r = known.1, abs(l - r) > 0.01 { return l > r }
 
-        let best = candidates.max { lhs, rhs in
-            if abs(lhs.confidence - rhs.confidence) > 0.02 {
-                return lhs.confidence < rhs.confidence
-            }
-            return lhs.text.count < rhs.text.count
+            let words = (Self.wordCount(lhs.text), Self.wordCount(rhs.text))
+            if words.0 != words.1 { return words.0 < words.1 }
+
+            if abs(lhs.confidence - rhs.confidence) > 0.02 { return lhs.confidence > rhs.confidence }
+            return lhs.locale.hasPrefix("en")
         }
-        return best?.text ?? ""
+    }
+
+    /// Доля слов, которые системный словарь орфографии считает существующими.
+    /// nil — словаря этого языка в системе нет, и критерий пропускается,
+    /// иначе язык без словаря проигрывал бы всегда.
+    private static func knownWordRatio(_ channel: Channel) -> Double? {
+        let language = String(channel.locale.prefix(2))
+        guard spellCheckerSupports(language) else { return nil }
+
+        let words = channel.text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.map(String.init)
+        guard !words.isEmpty else { return 0 }
+
+        let known = words.filter { word in
+            NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0, language: language,
+                                                wrap: false, inSpellDocumentWithTag: 0,
+                                                wordCount: nil).location == NSNotFound
+        }
+        return Double(known.count) / Double(words.count)
+    }
+
+    private static func spellCheckerSupports(_ language: String) -> Bool {
+        NSSpellChecker.shared.availableLanguages.contains {
+            $0 == language || $0.hasPrefix(language + "_") || $0.hasPrefix(language + "-")
+        }
+    }
+
+    private static func wordCount(_ text: String) -> Int {
+        text.split { !$0.isLetter && $0 != "'" && $0 != "-" }.count
     }
 
     private static func averageConfidence(_ transcription: SFTranscription) -> Double {
@@ -168,19 +219,19 @@ final class MicRecorder {
 }
 
 /// Финальный результат и таймаут могут прийти оба — возобновляем строго один раз.
-final class ResumeOnceString: @unchecked Sendable {
-    private var continuation: CheckedContinuation<String, Never>?
+final class ResumeOnceVoid: @unchecked Sendable {
+    private var continuation: CheckedContinuation<Void, Never>?
     private let lock = NSLock()
 
-    init(_ continuation: CheckedContinuation<String, Never>) {
+    init(_ continuation: CheckedContinuation<Void, Never>) {
         self.continuation = continuation
     }
 
-    func finish(_ value: String) {
+    func finish() {
         lock.lock()
         guard let continuation else { lock.unlock(); return }
         self.continuation = nil
         lock.unlock()
-        continuation.resume(returning: value)
+        continuation.resume()
     }
 }

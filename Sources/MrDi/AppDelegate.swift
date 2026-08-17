@@ -179,16 +179,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HUDController.shared.updateListening(hint: "Распознаю…")
 
         Task {
-            let text = await MicRecorder.shared.stop()
+            let hypotheses = await MicRecorder.shared.stop()
             dictationLatched = false
             dictationStart = nil
-            guard !text.isEmpty else {
+            guard let best = hypotheses.first else {
                 HUDController.shared.showMessage("Не расслышал — удерживайте ⌥V и произнесите слово чётче")
                 return
             }
+            // вторую версию отдаём в подсказку: если язык угадан неверно,
+            // ⇥ переключит на неё, не заставляя диктовать заново
+            let alternative = hypotheses.dropFirst().first.map {
+                Capture(text: $0.text, context: nil, sourceApp: "Микрофон")
+            }
             HUDController.shared.lookup(
-                Capture(text: text, context: nil, sourceApp: "Микрофон"),
-                mode: "voice", anchor: anchor)
+                Capture(text: best.text, context: nil, sourceApp: "Микрофон"),
+                mode: "voice", anchor: anchor, alternative: alternative)
         }
     }
 
