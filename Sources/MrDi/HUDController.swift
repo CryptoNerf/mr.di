@@ -221,7 +221,7 @@ final class HUDController {
 
     private func speakCurrent() {
         guard let r = current else { return }
-        Speaker.speak(r.isPhrase ? r.surface : r.lemma)
+        Speaker.speak(r.lemma)   // lemma всегда английская сторона, в любом направлении
     }
 
     private func saveCurrent() {

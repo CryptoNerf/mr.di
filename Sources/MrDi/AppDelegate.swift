@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         dictationStart = Date()
         dictationLatched = false
-        HUDController.shared.showListening(hint: "Отпустите ⌥V — переведу")
+        HUDController.shared.showListening(hint: "Скажите слово по-английски или по-русски, затем отпустите ⌥V")
         MicRecorder.shared.onPartial = { partial in
             HUDController.shared.updateListening(partial)
         }
@@ -183,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             dictationLatched = false
             dictationStart = nil
             guard !text.isEmpty else {
-                HUDController.shared.showMessage("Не расслышал — удерживайте ⌥V и произнесите слово")
+                HUDController.shared.showMessage("Не расслышал — удерживайте ⌥V и произнесите слово чётче")
                 return
             }
             HUDController.shared.lookup(

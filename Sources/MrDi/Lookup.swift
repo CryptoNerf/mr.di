@@ -2,9 +2,10 @@ import Foundation
 import NaturalLanguage
 
 struct LookupResult {
-    var surface: String          // как встретилось в тексте
-    var lemma: String            // словарная форма
-    var translation: String
+    var surface: String          // как встретилось в тексте или прозвучало
+    var lemma: String            // всегда английская сторона, в словарной форме
+    var translation: String      // всегда русская сторона
+    var direction: Direction = .enToRu
     var pos: String?
     var ipa: String?
     var senses: [Sense] = []
@@ -12,6 +13,10 @@ struct LookupResult {
     var contextTranslation: String?
     var source: String?
     var isPhrase: Bool
+
+    /// Главная строка подсказки — то, чего пользователь не знает.
+    /// Спросили по-английски — это перевод, спросили по-русски — само английское слово.
+    var primary: String { direction == .enToRu ? translation : lemma }
 }
 
 enum Lookup {
@@ -25,23 +30,35 @@ enum Lookup {
 
         let isPhrase = raw.split(whereSeparator: { $0 == " " || $0 == "\n" }).count > 1
         let surface = isPhrase ? raw : raw.trimmingCharacters(in: .punctuationCharacters)
-        let lemma = isPhrase ? surface : lemmatize(surface)
+
+        switch Direction.detect(surface) {
+        case .enToRu:
+            return await englishLookup(surface: surface, isPhrase: isPhrase, capture: capture, mode: mode)
+        case .ruToEn:
+            return await russianLookup(surface: surface, isPhrase: isPhrase, capture: capture, mode: mode)
+        }
+    }
+
+    /// Спросили английское слово — нужен его русский перевод.
+    private static func englishLookup(surface: String, isPhrase: Bool,
+                                      capture: Capture, mode: String) async -> Result<LookupResult, Error> {
+        let lemma = isPhrase ? surface : lemmatize(surface, language: .english)
         let pos = isPhrase ? nil : partOfSpeech(surface)
 
         Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode)
 
         var result = LookupResult(surface: surface, lemma: lemma, translation: "",
-                                  pos: pos, ipa: nil, context: capture.context,
-                                  source: capture.sourceApp, isPhrase: isPhrase)
+                                  direction: .enToRu, pos: pos, ipa: nil,
+                                  context: capture.context, source: capture.sourceApp,
+                                  isPhrase: isPhrase)
 
         let key = "en-ru:" + lemma.lowercased()
         if let hit = Store.shared.cached(key) {
             result.translation = hit
             return .success(result)
         }
-
         do {
-            let translation = try await TranslationBridge.shared.translate(lemma)
+            let translation = try await TranslationBridge.enToRu.translate(lemma)
             Store.shared.putCache(key, translation)
             result.translation = translation
             return .success(result)
@@ -50,19 +67,49 @@ enum Lookup {
         }
     }
 
+    /// Сказали русское слово — нужно английское. В словарь при этом всё равно ложится
+    /// карточка «английское слово → русское»: словарь остаётся английским независимо
+    /// от того, с какой стороны о слове спросили.
+    private static func russianLookup(surface: String, isPhrase: Bool,
+                                      capture: Capture, mode: String) async -> Result<LookupResult, Error> {
+        let key = "ru-en:" + surface.lowercased()
+        let english: String
+        if let hit = Store.shared.cached(key) {
+            english = hit
+        } else {
+            do {
+                english = try await TranslationBridge.ruToEn.translate(surface)
+                Store.shared.putCache(key, english)
+            } catch {
+                return .failure(error)
+            }
+        }
+
+        let lemma = isPhrase ? english : lemmatize(english, language: .english)
+        let russian = isPhrase ? surface : lemmatize(surface, language: .russian)
+        Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode)
+
+        return .success(LookupResult(surface: surface, lemma: lemma, translation: russian,
+                                     direction: .ruToEn,
+                                     pos: isPhrase ? nil : partOfSpeech(english),
+                                     ipa: nil, context: capture.context,
+                                     source: capture.sourceApp, isPhrase: isPhrase))
+    }
+
     /// Перевод предложения-контекста — только подсказка о смысле, поэтому идёт следом.
     static func contextTranslation(_ context: String?) async -> String? {
         guard let context, context.count < 400 else { return nil }
         let key = "en-ru-ctx:" + String(context.hashValue)
         if let hit = Store.shared.cached(key) { return hit }
-        guard let translated = try? await TranslationBridge.shared.translate(context) else { return nil }
+        guard let translated = try? await TranslationBridge.enToRu.translate(context) else { return nil }
         Store.shared.putCache(key, translated)
         return translated
     }
 
-    static func lemmatize(_ word: String) -> String {
+    static func lemmatize(_ word: String, language: NLLanguage) -> String {
         let tagger = NLTagger(tagSchemes: [.lemma])
         tagger.string = word
+        tagger.setLanguage(language, range: word.startIndex..<word.endIndex)
         let (tag, _) = tagger.tag(at: word.startIndex, unit: .word, scheme: .lemma)
         if let lemma = tag?.rawValue, !lemma.isEmpty { return lemma }
         return word
@@ -71,6 +118,7 @@ enum Lookup {
     static func partOfSpeech(_ word: String) -> String? {
         let tagger = NLTagger(tagSchemes: [.lexicalClass])
         tagger.string = word
+        tagger.setLanguage(.english, range: word.startIndex..<word.endIndex)
         let (tag, _) = tagger.tag(at: word.startIndex, unit: .word, scheme: .lexicalClass)
         switch tag {
         case .noun?: return "сущ."

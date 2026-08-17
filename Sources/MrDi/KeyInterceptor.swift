@@ -10,6 +10,10 @@ final class KeyInterceptor {
 
     /// Возврат true — событие поглощается и до активного приложения не доходит.
     var onKeyDown: ((Int64) -> Bool)?
+
+    /// Временный перехватчик поверх основного: на время выделения области
+    /// клавиши принадлежат ему, а не подсказке.
+    var onKeyDownOverride: ((Int64) -> Bool)?
     var onMouseDown: (() -> Void)?
 
     private var tap: CFMachPort?
@@ -42,7 +46,11 @@ final class KeyInterceptor {
             switch type {
             case .keyDown:
                 let code = event.getIntegerValueField(.keyboardEventKeycode)
-                if KeyInterceptor.shared.onKeyDown?(code) == true { return nil }
+                if let override = KeyInterceptor.shared.onKeyDownOverride {
+                    if override(code) { return nil }
+                } else if KeyInterceptor.shared.onKeyDown?(code) == true {
+                    return nil
+                }
             case .leftMouseDown, .rightMouseDown:
                 DispatchQueue.main.async { KeyInterceptor.shared.onMouseDown?() }
             case .tapDisabledByTimeout, .tapDisabledByUserInput:

@@ -17,10 +17,13 @@ final class RegionSelector {
         isActive = true
         self.completion = completion
 
+        // окно выделения не активирует приложение: иначе macOS поднимает вперёд
+        // все его окна, и открытый словарь оказывается поверх той самой области,
+        // которую пользователь собирается обвести
         for screen in NSScreen.screens {
-            let window = NSWindow(contentRect: screen.frame,
-                                  styleMask: [.borderless],
-                                  backing: .buffered, defer: false, screen: screen)
+            let window = NSPanel(contentRect: screen.frame,
+                                 styleMask: [.borderless, .nonactivatingPanel],
+                                 backing: .buffered, defer: false, screen: screen)
             window.level = .screenSaver
             window.backgroundColor = NSColor.black.withAlphaComponent(0.22)
             window.isOpaque = false
@@ -32,15 +35,23 @@ final class RegionSelector {
             window.orderFrontRegardless()
             overlays.append(window)
         }
-        overlays.first?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
         NSCursor.crosshair.push()
+
+        // Esc ловим event-tap'ом: окно намеренно не становится key-окном
+        KeyInterceptor.shared.onKeyDownOverride = { code in
+            guard code == KeyCode.escape else { return false }
+            DispatchQueue.main.async { RegionSelector.shared.finish(rect: nil, screen: nil) }
+            return true
+        }
+        KeyInterceptor.shared.start()
     }
 
     fileprivate func finish(rect: NSRect?, screen: NSScreen?) {
         guard isActive else { return }
         isActive = false
         NSCursor.pop()
+        KeyInterceptor.shared.onKeyDownOverride = nil
+        if !HUDController.shared.isVisible { KeyInterceptor.shared.stop() }
         overlays.forEach { $0.orderOut(nil) }
         overlays.removeAll()
 
@@ -67,6 +78,10 @@ private final class SelectionView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Приложение неактивно, поэтому первый клик должен сразу начинать выделение,
+    /// а не тратиться на активацию окна.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func mouseDown(with event: NSEvent) {
         origin = convert(event.locationInWindow, from: nil)
         currentRect = .zero
@@ -91,12 +106,6 @@ private final class SelectionView: NSView {
                             y: currentRect.minY + screenRef.frame.minY,
                             width: currentRect.width, height: currentRect.height)
         RegionSelector.shared.finish(rect: global, screen: screenRef)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {   // Esc
-            RegionSelector.shared.finish(rect: nil, screen: nil)
-        }
     }
 
     override func draw(_ dirtyRect: NSRect) {

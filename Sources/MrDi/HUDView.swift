@@ -59,8 +59,9 @@ struct HUDView: View {
                     }
                 }
 
-            // невидимая подложка, которая держит сессию перевода прогретой
-            TranslationHost()
+            // невидимые подложки, которые держат обе сессии перевода прогретыми
+            TranslationHost(direction: .enToRu)
+            TranslationHost(direction: .ruToEn)
         }
         .padding(10)
         .environment(\.colorScheme, .dark)
@@ -139,11 +140,20 @@ struct HUDView: View {
         case .result(let r):
             VStack(alignment: .leading, spacing: 10) {
                 header(r)
-                Text(r.translation)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(HUDColor.primary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(r.primary)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(HUDColor.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // при вопросе по-русски английское слово стоит здесь,
+                    // и транскрипция должна быть рядом с ним, а не в шапке
+                    if r.direction == .ruToEn, let ipa = r.ipa, !ipa.isEmpty {
+                        Text(ipa)
+                            .font(.system(size: 13, design: .serif))
+                            .foregroundStyle(HUDColor.tertiary)
+                    }
+                }
 
                 if !r.senses.isEmpty {
                     Divider().overlay(Color.white.opacity(0.15))
@@ -207,10 +217,10 @@ struct HUDView: View {
                 .foregroundStyle(HUDColor.secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-            if r.lemma.lowercased() != r.surface.lowercased() {
+            if r.direction == .enToRu, r.lemma.lowercased() != r.surface.lowercased() {
                 Text("→ \(r.lemma)").font(.system(size: 12)).foregroundStyle(HUDColor.tertiary)
             }
-            if let ipa = r.ipa, !ipa.isEmpty {
+            if r.direction == .enToRu, let ipa = r.ipa, !ipa.isEmpty {
                 Text(ipa)
                     .font(.system(size: 12, design: .serif))
                     .foregroundStyle(HUDColor.tertiary)

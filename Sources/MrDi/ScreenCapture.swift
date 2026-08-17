@@ -44,13 +44,10 @@ enum ScreenCapture {
         else { throw ScreenCaptureError.displayNotFound }
         let displayID = CGDirectDisplayID(number.uint32Value)
 
-        let content: SCShareableContent
-        if let cachedContent, cachedContent.displays.contains(where: { $0.displayID == displayID }) {
-            content = cachedContent
-        } else {
-            content = try await SCShareableContent.current
-            cachedContent = content
-        }
+        // список окон берём свежий: он нужен, чтобы вычесть из снимка собственные окна,
+        // а они появляются и исчезают как раз между запросами
+        let content = try await SCShareableContent.current
+        cachedContent = content
         guard let display = content.displays.first(where: { $0.displayID == displayID })
         else { throw ScreenCaptureError.displayNotFound }
 
@@ -70,7 +67,12 @@ enum ScreenCapture {
         config.ignoreGlobalClipDisplay = true
         config.ignoreShadowsDisplay = true
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // собственные окна не должны попасть в кадр: открытый словарь поверх нужной
+        // области распознался бы вместо неё
+        let ownWindows = content.windows.filter {
+            $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 }
