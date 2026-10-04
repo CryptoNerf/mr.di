@@ -28,6 +28,9 @@ enum ScreenCapture {
     private static var cachedContent: SCShareableContent?
 
     static func prewarm() {
+        // без разрешения запрос списка экранов сам вызывает системный диалог —
+        // на первом запуске он вылезал бы поверх окна настройки раньше, чем нужен
+        guard hasPermission else { return }
         Task { cachedContent = try? await SCShareableContent.current }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,

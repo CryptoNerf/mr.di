@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = Store.shared          // открыть базу и домигрировать схему заранее,
         HUDController.shared.warmUp()   // чтобы первый же перевод не ждал диск
         registerHotkeys()
+        LoginItem.ensureEnabled()   // после перезагрузки перевод должен работать без ручного запуска
         HotkeySettings.shared.onChange = { [weak self] in self?.registerHotkeys() }
         ScreenCapture.prewarm()
 
@@ -35,15 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if UserDefaults.standard.bool(forKey: listenKey) { startListening() }
 
-        if !SelectionCapture.isTrusted {
-            SelectionCapture.requestPermission()
+        // тем, кто уже всё настроил до появления окна настройки, его не показываем
+        if UserDefaults.standard.bool(forKey: onboardedKey), SelectionCapture.isTrusted {
+            UserDefaults.standard.set(true, forKey: SetupWindow.doneKey)
         }
-
-        // первый запуск: сразу показываем окно словаря — иначе приложение
-        // выглядит как «ничего не произошло», и найти его негде
-        if !UserDefaults.standard.bool(forKey: onboardedKey) {
-            UserDefaults.standard.set(true, forKey: onboardedKey)
-            WordListWindow.shared.show()
+        // первый запуск или пропал главный доступ: без окна приложение выглядит
+        // как «ничего не произошло», а нужный переключатель спрятан в настройках
+        if SetupWindow.isNeeded {
+            SetupWindow.shared.show()
         }
     }
 
@@ -69,8 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem = add(to: menu, title: "Запускать при входе", key: "", action: #selector(toggleLoginItem))
         menu.addItem(.separator())
         add(to: menu, title: "Сочетания клавиш…", key: "", action: #selector(openSettings))
-        add(to: menu, title: "Как пользоваться", key: "", action: #selector(openWordList))
-        add(to: menu, title: "Доступ к Универсальному доступу…", key: "", action: #selector(openAccessibilitySettings))
+        add(to: menu, title: "Как пользоваться…", key: "", action: #selector(openSetup))
         menu.addItem(.separator())
         menu.addItem(withTitle: "Выйти", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.delegate = self
@@ -118,8 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         guard SelectionCapture.isTrusted else {
-            SelectionCapture.requestPermission()
-            HUDController.shared.showMessage("Нужен доступ: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ")
+            SetupWindow.shared.show()
             return
         }
         guard let capture = SelectionCapture.grab() else {
@@ -343,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleLoginItem() {
-        LoginItem.set(!LoginItem.isEnabled)
+        LoginItem.userSet(!LoginItem.isEnabled)
         loginItem?.state = LoginItem.isEnabled ? .on : .off
     }
 
@@ -364,8 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SettingsWindow.shared.show()
     }
 
-    @objc private func openAccessibilitySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        NSWorkspace.shared.open(url)
+    @objc private func openSetup() {
+        SetupWindow.shared.show()
     }
 }

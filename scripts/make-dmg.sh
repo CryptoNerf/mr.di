@@ -21,6 +21,12 @@ cat > "$STAGING/ПРОЧТИ МЕНЯ.txt" <<'NOTE'
 Mr.Di. — установка
 ==================
 
+Проще всего — одной командой в Терминале, без шагов ниже:
+
+   curl -fsSL https://raw.githubusercontent.com/CryptoNerf/mr.di/main/scripts/install.sh | bash
+
+Вручную:
+
 1. Перетащите MrDi в папку «Программы» слева.
 
 2. Откройте Терминал и выполните одну команду:

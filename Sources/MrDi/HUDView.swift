@@ -39,25 +39,32 @@ struct HUDView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            content
-                .padding(16)
-                .frame(width: 380, alignment: .leading)
-                .background {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial)
-                        RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.62))
+            // высоту окна выбирает контроллер: вся подсказка, если влезает в экран,
+            // иначе сколько влезет — а остальное прокручивается
+            ScrollView(.vertical) {
+                content
+                    .padding(16)
+                    .frame(width: 380, alignment: .leading)
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: HUDSizeKey.self, value: proxy.size)
+                        }
                     }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(width: 380)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.62))
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.14), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: HUDSizeKey.self, value: proxy.size)
-                    }
-                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
 
             // невидимые подложки, которые держат обе сессии перевода прогретыми
             TranslationHost(direction: .enToRu)
@@ -141,8 +148,11 @@ struct HUDView: View {
             VStack(alignment: .leading, spacing: 10) {
                 header(r)
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // перевод целого абзаца крупным жирным шрифтом читается тяжело
+                    // и занимает пол-экрана, поэтому длинный текст мельче
                     Text(r.primary)
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: r.primary.count > 60 ? 15 : 20,
+                                      weight: r.primary.count > 60 ? .regular : .semibold))
                         .foregroundStyle(HUDColor.primary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)

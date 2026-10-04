@@ -18,6 +18,11 @@ final class HUDController {
     private var anchor: NSPoint = .zero
     private var lastTranscript: String?
     private var lookupTask: Task<Void, Never>?
+    private var wantsMouse = false   // расшифровка: слова в ней кликабельны
+    private var isClipped = false    // не влезла в экран: нужна прокрутка колесом
+
+    /// Зазор до края экрана и до курсора.
+    private let margin: CGFloat = 8
 
     private var offscreenOrigin: NSPoint { NSPoint(x: -panelWidth - 80, y: 0) }
 
@@ -45,6 +50,9 @@ final class HUDController {
             onSize: { [weak self] size in self?.updateContentHeight(size.height) },
             onWordTap: { [weak self] word in self?.lookupWordFromTranscript(word) }
         ))
+        // размер окна задаём только мы: иначе NSHostingView сам растягивает его
+        // вниз по мере прихода перевода, мимо проверки границ экрана
+        hosting.sizingOptions = []
         p.contentView = hosting
         p.alphaValue = 0
         p.setFrameOrigin(offscreenOrigin)
@@ -117,6 +125,7 @@ final class HUDController {
                 guard !Task.isCancelled, isVisible else { return }
                 current = result
                 model.state = .result(result)
+                NotificationCenter.default.post(name: .mrdiLookupSucceeded, object: nil)
                 model.alreadySaved = Store.shared.isSaved(lemma: result.lemma.lowercased())
                 model.seenCount = Store.shared.lookupCount(lemma: result.lemma.lowercased())
 
@@ -209,7 +218,8 @@ final class HUDController {
     }
 
     private func setInteractive(_ interactive: Bool) {
-        panel?.ignoresMouseEvents = !interactive
+        wantsMouse = interactive
+        panel?.ignoresMouseEvents = !(wantsMouse || isClipped)
     }
 
     private func scheduleAutoHide(after seconds: TimeInterval) {
@@ -242,17 +252,40 @@ final class HUDController {
         if isVisible { layout() }
     }
 
-    /// Панель появляется рядом с курсором и не вылезает за край экрана.
+    /// Панель появляется рядом с курсором и целиком помещается на экран:
+    /// под курсором, если там хватает места, иначе над ним, иначе там, где места больше.
+    /// Выше экрана панель не растёт — остальное прокручивается колесом.
     private func layout() {
-        let screen = NSScreen.screens.first { $0.frame.contains(anchor) } ?? NSScreen.main
-        guard let visible = screen?.visibleFrame else { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(anchor) }
+            ?? NSScreen.screens.min { distance($0.frame, anchor) < distance($1.frame, anchor) }
+            ?? NSScreen.main
+        guard let visible = screen?.visibleFrame.insetBy(dx: margin, dy: margin) else { return }
 
-        var origin = NSPoint(x: anchor.x - 30, y: anchor.y - contentHeight - 12)
-        if origin.x + panelWidth > visible.maxX { origin.x = visible.maxX - panelWidth }
-        if origin.x < visible.minX { origin.x = visible.minX }
-        if origin.y < visible.minY { origin.y = anchor.y + 22 }              // не влезло снизу — показываем сверху
-        if origin.y + contentHeight > visible.maxY { origin.y = visible.maxY - contentHeight }
-        panel.setFrame(NSRect(x: origin.x, y: origin.y, width: panelWidth, height: contentHeight),
-                       display: true)
+        let height = min(contentHeight, visible.height)
+        isClipped = height < contentHeight
+        panel.ignoresMouseEvents = !(wantsMouse || isClipped)
+
+        let spaceBelow = anchor.y - 12 - visible.minY
+        let spaceAbove = visible.maxY - (anchor.y + 22)
+        var y: CGFloat
+        if height <= spaceBelow {
+            y = anchor.y - 12 - height
+        } else if height <= spaceAbove {
+            y = anchor.y + 22
+        } else {
+            y = spaceBelow >= spaceAbove ? visible.minY : visible.maxY - height
+        }
+        y = min(max(y, visible.minY), visible.maxY - height)
+
+        var x = anchor.x - 30
+        x = min(max(x, visible.minX), visible.maxX - panelWidth)
+
+        panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: height), display: true)
+    }
+
+    private func distance(_ rect: NSRect, _ point: NSPoint) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return hypot(dx, dy)
     }
 }
