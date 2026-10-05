@@ -98,22 +98,46 @@ final class SetupWindow: NSObject, NSWindowDelegate {
     static let shared = SetupWindow()
 
     static let doneKey = "mrdi.setupDone"
+    /// Приложение закрылось посреди настройки — чаще всего по кнопке
+    /// «Закрыть и открыть заново» после выдачи записи экрана. После перезапуска
+    /// окно должно вернуться: иначе человек не видит, что разрешение применилось.
+    private static let reopenKey = "mrdi.setupReopen"
+    private var isTerminating = false
 
     private var window: NSWindow?
     private let model = SetupModel()
     private var timer: Timer?
     private var lookupObserver: NSObjectProtocol?
 
-    private override init() {}
+    private override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applicationWillTerminate() }
+        }
+    }
 
-    /// Нужно ли показать окно при запуске: настройку ещё не прошли
-    /// или без главного разрешения приложение не сможет работать.
+    /// Нужно ли показать окно при запуске: настройку ещё не прошли,
+    /// без главного разрешения приложение не сможет работать,
+    /// или его закрыли посреди настройки ради применения разрешения.
     static var isNeeded: Bool {
-        !UserDefaults.standard.bool(forKey: doneKey) || !SelectionCapture.isTrusted
+        let defaults = UserDefaults.standard
+        return !defaults.bool(forKey: doneKey)
+            || !SelectionCapture.isTrusted
+            || defaults.bool(forKey: reopenKey)
+    }
+
+    private func applicationWillTerminate() {
+        isTerminating = true
+        if window?.isVisible == true {
+            UserDefaults.standard.set(true, forKey: Self.reopenKey)
+        }
     }
 
     func show() {
         HUDController.shared.hide()
+        UserDefaults.standard.removeObject(forKey: Self.reopenKey)
         model.refresh()
 
         if window == nil {
@@ -138,9 +162,22 @@ final class SetupWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         stopWatching()
-        // закрыли крестиком, но главное уже работает — это тоже «готово»
-        if SelectionCapture.isTrusted {
-            UserDefaults.standard.set(true, forKey: Self.doneKey)
+        // при выходе из приложения окно тоже закрывается — это не «готово»,
+        // а перезапуск посреди настройки
+        if isTerminating {
+            UserDefaults.standard.set(true, forKey: Self.reopenKey)
+            return
+        }
+        // закрыли крестиком, но главное уже работает — это тоже «готово».
+        // Решаем на следующем витке: если окно закрылось из-за выхода
+        // из приложения, сюда уже не дойдёт, и после перезапуска окно вернётся
+        UserDefaults.standard.set(true, forKey: Self.reopenKey)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isTerminating else { return }
+            UserDefaults.standard.removeObject(forKey: Self.reopenKey)
+            if SelectionCapture.isTrusted {
+                UserDefaults.standard.set(true, forKey: Self.doneKey)
+            }
         }
     }
 
