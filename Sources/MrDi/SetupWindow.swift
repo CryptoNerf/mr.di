@@ -45,6 +45,21 @@ final class SetupModel: ObservableObject {
         }
     }
 
+    /// Переключатель в настройках включён, а доступа нет: он остался от прошлой
+    /// версии с другой подписью. Убираем устаревшую запись и просим заново —
+    /// в списке появится свежая строка для этой версии.
+    func resetAccessibility() {
+        SetupWindow.resetPermission("Accessibility")
+        SelectionCapture.requestPermission()
+        askedAccessibility = true
+    }
+
+    func resetScreen() {
+        SetupWindow.resetPermission("ScreenCapture")
+        ScreenCapture.requestPermission()
+        askedScreen = true
+    }
+
     func requestScreen() {
         if askedScreen {
             SetupWindow.openPrivacyPane("Privacy_ScreenCapture")
@@ -159,6 +174,14 @@ final class SetupWindow: NSObject, NSWindowDelegate {
         }
     }
 
+    static func resetPermission(_ service: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", service, Bundle.main.bundleIdentifier ?? "com.mrdi.app"]
+        try? task.run()
+        task.waitUntilExit()
+    }
+
     static func openPrivacyPane(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
@@ -199,6 +222,9 @@ struct SetupView: View {
                     button: model.askedAccessibility ? "Открыть настройки" : "Разрешить",
                     prominent: true,
                     action: model.requestAccessibility)
+                if model.askedAccessibility, !model.accessibility {
+                    StaleHint(action: model.resetAccessibility)
+                }
             }
 
             section("Попробуйте") { tryIt }
@@ -215,13 +241,14 @@ struct SetupView: View {
                         action: model.requestScreen)
                     if model.askedScreen, !model.screen {
                         HStack {
-                            Text("Уже включили? macOS применит разрешение после перезапуска.")
+                            Text("Только что включили? macOS применит разрешение после перезапуска.")
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                             Spacer()
                             Button("Перезапустить") { SetupWindow.relaunch() }
                                 .controlSize(.small)
                         }
                         .padding(.leading, 30)
+                        StaleHint(action: model.resetScreen)
                     }
                     PermissionRow(
                         done: model.microphone,
@@ -369,6 +396,24 @@ private struct PermissionRow: View {
                 }
             }
         }
+    }
+}
+
+/// Переключатель от прошлой версии выглядит включённым, но не работает —
+/// самая запутанная ситуация, поэтому выход из неё прямо здесь, одной кнопкой.
+private struct StaleHint: View {
+    let action: () -> Void
+
+    var body: some View {
+        HStack {
+            Text("Переключатель включён давно, а галочки нет? Так бывает после обновления.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Сбросить и разрешить заново", action: action)
+                .controlSize(.small)
+        }
+        .padding(.leading, 30)
     }
 }
 

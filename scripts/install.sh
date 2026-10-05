@@ -36,9 +36,20 @@ hdiutil attach "$TMP/MrDi.dmg" -mountpoint "$MOUNT" -nobrowse -quiet
 
 echo "→ устанавливаю в /Applications"
 pkill -x MrDi 2>/dev/null || true
+UPDATING=false
+[[ -d "$APP" ]] && UPDATING=true
 rm -rf "$APP"
 ditto "$MOUNT/MrDi.app" "$APP"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+# Разрешения macOS привязывает к подписи, а у каждой версии она своя.
+# Без сброса переключатель в настройках остаётся включённым от старой версии,
+# но к новой не относится — и выглядит так, будто доступ дан, а он не работает.
+if $UPDATING; then
+    tccutil reset Accessibility com.mrdi.app >/dev/null 2>&1 || true
+    tccutil reset ScreenCapture com.mrdi.app >/dev/null 2>&1 || true
+    echo "  после обновления macOS попросит разрешения заново — это один щелчок"
+fi
 
 echo "→ запускаю"
 open "$APP"
