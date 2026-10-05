@@ -27,11 +27,6 @@ private enum HUDColor {
     static let accent = Color(red: 1.0, green: 0.72, blue: 0.35)
 }
 
-struct HUDSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
-}
-
 struct HUDView: View {
     @ObservedObject var model: HUDModel
     var onSize: (CGSize) -> Void = { _ in }
@@ -45,11 +40,9 @@ struct HUDView: View {
                 content
                     .padding(16)
                     .frame(width: 380, alignment: .leading)
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(key: HUDSizeKey.self, value: proxy.size)
-                        }
-                    }
+                    // не preference: изнутри ScrollView на macOS он наружу не доходит,
+                    // и панель оставалась высотой с «загрузку»
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(width: 380)
@@ -78,7 +71,6 @@ struct HUDView: View {
             onWordTap(word)
             return .handled
         })
-        .onPreferenceChange(HUDSizeKey.self) { size in onSize(size) }
     }
 
     @ViewBuilder
