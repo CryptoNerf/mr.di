@@ -24,7 +24,9 @@ enum Lookup {
     /// Быстрый путь: только то, что нужно показать в первые миллисекунды.
     /// Транскрипция, значения и перевод предложения доезжают следом и дописываются в панель —
     /// пользователь не должен ждать сеть, чтобы увидеть перевод слова.
-    static func base(_ capture: Capture, mode: String) async -> Result<LookupResult, Error> {
+    /// `record: false` — для ввода с клавиатуры: каждое промежуточное слово по мере
+    /// набора не должно попадать в историю просмотров.
+    static func base(_ capture: Capture, mode: String, record: Bool = true) async -> Result<LookupResult, Error> {
         let raw = capture.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return .failure(LookupError.empty) }
 
@@ -33,19 +35,22 @@ enum Lookup {
 
         switch Direction.detect(surface) {
         case .enToRu:
-            return await englishLookup(surface: surface, isPhrase: isPhrase, capture: capture, mode: mode)
+            return await englishLookup(surface: surface, isPhrase: isPhrase, capture: capture,
+                                       mode: mode, record: record)
         case .ruToEn:
-            return await russianLookup(surface: surface, isPhrase: isPhrase, capture: capture, mode: mode)
+            return await russianLookup(surface: surface, isPhrase: isPhrase, capture: capture,
+                                       mode: mode, record: record)
         }
     }
 
     /// Спросили английское слово — нужен его русский перевод.
     private static func englishLookup(surface: String, isPhrase: Bool,
-                                      capture: Capture, mode: String) async -> Result<LookupResult, Error> {
+                                      capture: Capture, mode: String,
+                                      record: Bool) async -> Result<LookupResult, Error> {
         let lemma = isPhrase ? surface : lemmatize(surface, language: .english)
         let pos = isPhrase ? nil : partOfSpeech(surface)
 
-        Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode)
+        if record { Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode) }
 
         var result = LookupResult(surface: surface, lemma: lemma, translation: "",
                                   direction: .enToRu, pos: pos, ipa: nil,
@@ -71,7 +76,8 @@ enum Lookup {
     /// карточка «английское слово → русское»: словарь остаётся английским независимо
     /// от того, с какой стороны о слове спросили.
     private static func russianLookup(surface: String, isPhrase: Bool,
-                                      capture: Capture, mode: String) async -> Result<LookupResult, Error> {
+                                      capture: Capture, mode: String,
+                                      record: Bool) async -> Result<LookupResult, Error> {
         let key = "ru-en:" + surface.lowercased()
         let english: String
         if let hit = Store.shared.cached(key) {
@@ -87,7 +93,7 @@ enum Lookup {
 
         let lemma = isPhrase ? english : lemmatize(english, language: .english)
         let russian = isPhrase ? surface : lemmatize(surface, language: .russian)
-        Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode)
+        if record { Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode) }
 
         return .success(LookupResult(surface: surface, lemma: lemma, translation: russian,
                                      direction: .ruToEn,

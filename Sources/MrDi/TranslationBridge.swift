@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import SwiftUI
 import Translation
 
@@ -69,6 +69,36 @@ final class TranslationBridge {
                 job.reply(.failure(error))
             }
         }
+    }
+}
+
+/// Отдельное невидимое окно под обе сессии перевода.
+///
+/// Сессия живёт, пока её вью на экране, поэтому окно никогда не убирается.
+/// Подсказка от этого не зависит: её можно скрывать по-настоящему — это нужно
+/// режиму ввода, где панель забирает клавиатуру и обязана её вернуть.
+@MainActor
+enum TranslationHostWindow {
+    private static var window: NSWindow?
+
+    static func install() {
+        guard window == nil else { return }
+        let w = NSWindow(contentRect: NSRect(x: -200, y: 0, width: 10, height: 10),
+                         styleMask: [.borderless], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.backgroundColor = .clear
+        w.isOpaque = false
+        w.hasShadow = false
+        w.ignoresMouseEvents = true
+        w.alphaValue = 0
+        w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        w.contentView = NSHostingView(rootView: ZStack {
+            TranslationHost(direction: .enToRu)
+            TranslationHost(direction: .ruToEn)
+        })
+        w.setFrameOrigin(NSPoint(x: -200, y: 0))
+        w.orderFrontRegardless()
+        window = w
     }
 }
 

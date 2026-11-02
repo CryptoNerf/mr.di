@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(to: menu, title: "Словарь…", key: "d", action: #selector(openWordList))
         reviewItem = add(to: menu, title: "Повторение…", key: "", action: #selector(openReview))
         add(to: menu, title: "Перевести выделенное", key: " ", action: #selector(lookupSelection))
+        add(to: menu, title: "Ввести слово…", key: "t", action: #selector(typeText))
         add(to: menu, title: "Перевести область экрана", key: "s", action: #selector(lookupScreenRegion))
         add(to: menu, title: "Переснять ту же область", key: "r", action: #selector(repeatLastRegion))
         add(to: menu, title: "Что прозвучало только что", key: "a", action: #selector(listenBack))
@@ -97,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = HotkeySettings.shared
         HotkeyManager.shared.replaceAll([
             (settings.shortcut(for: .lookupSelection), { [weak self] in self?.lookupSelection() }, nil),
+            (settings.shortcut(for: .typeText), { [weak self] in self?.typeText() }, nil),
             (settings.shortcut(for: .openDictionary), { [weak self] in self?.openWordList() }, nil),
             (settings.shortcut(for: .screenRegion), { [weak self] in self?.lookupScreenRegion() }, nil),
             (settings.shortcut(for: .repeatRegion), { [weak self] in self?.repeatLastRegion() }, nil),
@@ -125,6 +127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         HUDController.shared.lookup(capture, mode: "selection")
+    }
+
+    /// Слово, которого нет на экране: набрать его самому. Повторное нажатие закрывает поле.
+    @objc private func typeText() {
+        if HUDController.shared.isTyping {
+            HUDController.shared.hide()
+            return
+        }
+        HUDController.shared.beginTyping()
     }
 
     // MARK: - Микрофон

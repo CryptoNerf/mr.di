@@ -7,12 +7,13 @@ enum OCRError: LocalizedError {
 }
 
 enum OCR {
-    /// Распознаём только английский: словарь всё равно англо-русский,
-    /// а сужение языка заметно повышает точность на коротких фрагментах.
+    /// Только английский и русский: сужение языков повышает точность на коротких
+    /// фрагментах. Английский идёт первым — на нём основная часть запросов, а русский
+    /// нужен, чтобы обвести русское слово и узнать, как оно будет по-английски.
     static func recognize(_ image: CGImage) throws -> String {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
-        request.recognitionLanguages = ["en-US"]
+        request.recognitionLanguages = ["en-US", "ru-RU"]
         request.usesLanguageCorrection = true
 
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])

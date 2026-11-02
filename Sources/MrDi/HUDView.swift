@@ -8,9 +8,14 @@ final class HUDModel: ObservableObject {
         case transcript(String)
         case listening(String)
         case error(String)
+        case prompt              // поле ввода пустое
     }
 
     @Published var state: State = .loading("")
+    @Published var isTyping = false
+    @Published var input = ""
+    /// Растёт при каждом открытии поля — по нему поле заново получает фокус.
+    @Published var typingSession = 0
     @Published var alreadySaved = false
     @Published var justSaved = false
     @Published var seenCount = 0
@@ -31,13 +36,18 @@ struct HUDView: View {
     @ObservedObject var model: HUDModel
     var onSize: (CGSize) -> Void = { _ in }
     var onWordTap: (String) -> Void = { _ in }
+    var onInput: (String) -> Void = { _ in }
+
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             // высоту окна выбирает контроллер: вся подсказка, если влезает в экран,
             // иначе сколько влезет — а остальное прокручивается
             ScrollView(.vertical) {
-                content
+                Group {
+                    if model.isTyping { typingContent } else { content }
+                }
                     .padding(16)
                     .frame(width: 380, alignment: .leading)
                     // не preference: изнутри ScrollView на macOS он наружу не доходит,
@@ -58,10 +68,6 @@ struct HUDView: View {
                     .strokeBorder(.white.opacity(0.14), lineWidth: 1)
             )
             .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
-
-            // невидимые подложки, которые держат обе сессии перевода прогретыми
-            TranslationHost(direction: .enToRu)
-            TranslationHost(direction: .ruToEn)
         }
         .padding(10)
         .environment(\.colorScheme, .dark)
@@ -73,9 +79,43 @@ struct HUDView: View {
         })
     }
 
+    /// Поле ввода сверху, перевод под ним — в той же карточке, что и обычная подсказка.
+    private var typingContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "character.cursor.ibeam")
+                    .font(.system(size: 14))
+                    .foregroundStyle(HUDColor.accent)
+                TextField("", text: $model.input,
+                          prompt: Text("Слово или фраза по-русски или по-английски")
+                            .foregroundStyle(HUDColor.tertiary))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(HUDColor.primary)
+                    .focused($fieldFocused)
+                    .onChange(of: model.input) { _, text in onInput(text) }
+            }
+            if case .prompt = model.state {
+                HStack(spacing: 10) {
+                    Text("Перевод появится по мере набора")
+                        .font(.system(size: 11)).foregroundStyle(HUDColor.tertiary)
+                    Spacer(minLength: 4)
+                    key("␛", "закрыть")
+                }
+            } else {
+                Divider().overlay(Color.white.opacity(0.15))
+                content
+            }
+        }
+        .task(id: model.typingSession) { fieldFocused = true }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch model.state {
+        case .prompt:
+            EmptyView()
+
         case .loading(let word):
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
@@ -256,7 +296,8 @@ struct HUDView: View {
                 key("⏎", "добавить")
             }
             Spacer(minLength: 4)
-            key("P", "произнести")
+            // при вводе буква P нужна полю, поэтому произношение — через ⌘
+            key(model.isTyping ? "⌘P" : "P", "произнести")
             key("␛", "закрыть")
         }
         .padding(.top, 2)

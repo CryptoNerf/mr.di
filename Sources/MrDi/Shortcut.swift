@@ -76,6 +76,7 @@ struct Shortcut: Codable, Equatable {
 /// Действия, которым можно назначить сочетание.
 enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     case lookupSelection
+    case typeText
     case screenRegion
     case repeatRegion
     case voiceEnglish
@@ -88,6 +89,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .lookupSelection: return "Перевести выделенное"
+        case .typeText: return "Ввести слово"
         case .screenRegion: return "Перевести область экрана"
         case .repeatRegion: return "Переснять ту же область"
         case .voiceEnglish: return "Сказать по-английски"
@@ -99,6 +101,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
 
     var hint: String? {
         switch self {
+        case .typeText: return "по-русски или по-английски — перевод по мере набора"
         case .voiceEnglish: return "английское слово → русский перевод"
         case .voiceRussian: return "русское слово → английское"
         case .repeatRegion: return "для субтитров: обвели один раз, дальше только эта клавиша"
@@ -109,6 +112,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     var defaultShortcut: Shortcut {
         switch self {
         case .lookupSelection: return Shortcut(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey))
+        case .typeText: return Shortcut(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(optionKey))
         case .screenRegion: return Shortcut(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(optionKey))
         case .repeatRegion: return Shortcut(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(optionKey))
         case .voiceEnglish: return Shortcut(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey))
