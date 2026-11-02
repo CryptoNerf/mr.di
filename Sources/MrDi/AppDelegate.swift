@@ -6,13 +6,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let onboardedKey = "mrdi.onboarded"
 
-    /// Последняя снятая область: по ⌥R она переснимается без выделения —
+    /// Последняя снятая область: по «переснять» она переснимается без выделения —
     /// один хоткей на каждую новую строку субтитров.
     private var lastRegion: (rect: NSRect, screen: NSScreen)?
     private var appToRestore: NSRunningApplication?
     private var listenItem: NSMenuItem?
     private var reviewItem: NSMenuItem?
     private var loginItem: NSMenuItem?
+    /// Пункты меню, у которых есть глобальное сочетание: их подписи
+    /// обновляются вместе с настройками.
+    private var shortcutItems: [HotkeyAction: NSMenuItem] = [:]
     private let listenKey = "mrdi.listen"
     private let listenSeconds: Double = 15
     private var dictationStart: Date?
@@ -53,24 +56,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "character.book.closed.fill", accessibilityDescription: "Словарь")
         item.button?.image?.isTemplate = true
-        item.button?.toolTip = "MrDi — ⌥Space перевести выделенное, ⌥D словарь"
 
         let menu = NSMenu()
-        add(to: menu, title: "Словарь…", key: "d", action: #selector(openWordList))
-        reviewItem = add(to: menu, title: "Повторение…", key: "", action: #selector(openReview))
-        add(to: menu, title: "Перевести выделенное", key: " ", action: #selector(lookupSelection))
-        add(to: menu, title: "Ввести слово…", key: "t", action: #selector(typeText))
-        add(to: menu, title: "Перевести область экрана", key: "s", action: #selector(lookupScreenRegion))
-        add(to: menu, title: "Переснять ту же область", key: "r", action: #selector(repeatLastRegion))
-        add(to: menu, title: "Что прозвучало только что", key: "a", action: #selector(listenBack))
-        add(to: menu, title: "Сказать по-английски", key: "", action: #selector(dictateEnglish))
-        add(to: menu, title: "Сказать по-русски", key: "", action: #selector(dictateRussian))
+        add(to: menu, title: "Словарь…", hotkey: .openDictionary, action: #selector(openWordList))
+        reviewItem = add(to: menu, title: "Повторение…", action: #selector(openReview))
+        add(to: menu, title: "Перевести выделенное", hotkey: .lookupSelection, action: #selector(lookupSelection))
+        add(to: menu, title: "Ввести слово…", hotkey: .typeText, action: #selector(typeText))
+        add(to: menu, title: "Перевести область экрана", hotkey: .screenRegion, action: #selector(lookupScreenRegion))
+        add(to: menu, title: "Переснять ту же область", hotkey: .repeatRegion, action: #selector(repeatLastRegion))
+        add(to: menu, title: "Что прозвучало только что", hotkey: .listenBack, action: #selector(listenBack))
+        add(to: menu, title: "Сказать по-английски", hotkey: .voiceEnglish, action: #selector(dictateEnglish))
+        add(to: menu, title: "Сказать по-русски", hotkey: .voiceRussian, action: #selector(dictateRussian))
         menu.addItem(.separator())
-        listenItem = add(to: menu, title: "Слушать системный звук", key: "", action: #selector(toggleListening))
-        loginItem = add(to: menu, title: "Запускать при входе", key: "", action: #selector(toggleLoginItem))
+        listenItem = add(to: menu, title: "Слушать системный звук", action: #selector(toggleListening))
+        loginItem = add(to: menu, title: "Запускать при входе", action: #selector(toggleLoginItem))
         menu.addItem(.separator())
-        add(to: menu, title: "Сочетания клавиш…", key: "", action: #selector(openSettings))
-        add(to: menu, title: "Как пользоваться…", key: "", action: #selector(openSetup))
+        add(to: menu, title: "Сочетания клавиш…", action: #selector(openSettings))
+        add(to: menu, title: "Как пользоваться…", action: #selector(openSetup))
         menu.addItem(.separator())
         menu.addItem(withTitle: "Выйти", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.delegate = self
@@ -81,20 +83,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Пункты меню показывают то же сочетание, что работает глобально,
     /// чтобы хоткеи вообще можно было найти.
     @discardableResult
-    private func add(to menu: NSMenu, title: String, key: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+    private func add(to menu: NSMenu, title: String, hotkey: HotkeyAction? = nil, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
-        if !key.isEmpty {
-            item.keyEquivalentModifierMask = .option
-            item.isAlternate = false
-        }
+        if let hotkey { shortcutItems[hotkey] = item }
         menu.addItem(item)
         return item
+    }
+
+    /// Меню и подсказка у иконки повторяют текущие сочетания — после переназначения
+    /// старые подписи только сбивали бы с толку.
+    private func updateShortcutLabels() {
+        let settings = HotkeySettings.shared
+        for (action, item) in shortcutItems {
+            let equivalent = settings.shortcut(for: action).menuKeyEquivalent
+            item.keyEquivalent = equivalent.key
+            item.keyEquivalentModifierMask = equivalent.modifiers
+        }
+        statusItem?.button?.toolTip = "MrDi — \(settings.shortcut(for: .lookupSelection).display) перевести выделенное, "
+            + "\(settings.shortcut(for: .openDictionary).display) словарь"
     }
 
     // MARK: - Хоткеи
 
     private func registerHotkeys() {
+        updateShortcutLabels()
         let settings = HotkeySettings.shared
         HotkeyManager.shared.replaceAll([
             (settings.shortcut(for: .lookupSelection), { [weak self] in self?.lookupSelection() }, nil),
@@ -262,7 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func listenBack() {
         guard SystemAudioRecorder.shared.isRunning else {
-            HUDController.shared.showMessage("Включите «Слушать системный звук» в меню — тогда ⌥A покажет расшифровку последних \(Int(listenSeconds)) секунд")
+            let key = HotkeySettings.shared.shortcut(for: .listenBack).display
+            HUDController.shared.showMessage("Включите «Слушать системный звук» в меню — тогда \(key) покажет расшифровку последних \(Int(listenSeconds)) секунд")
             return
         }
         guard let buffer = SystemAudioRecorder.shared.recentAudio(seconds: listenSeconds) else {

@@ -47,6 +47,7 @@ final class ReviewModel: ObservableObject {
 
 struct ReviewView: View {
     @ObservedObject var model: ReviewModel
+    @ObservedObject private var hotkeys = HotkeySettings.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -174,7 +175,7 @@ struct ReviewView: View {
                 Text("Следующее слово — \(next.formatted(.relative(presentation: .named)))")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             } else {
-                Text("Добавляйте слова через ⌥Space — они появятся здесь")
+                Text("Добавляйте слова через \(hotkeys.shortcut(for: .lookupSelection).display) — они появятся здесь")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Button("Проверить ещё раз") { model.load() }

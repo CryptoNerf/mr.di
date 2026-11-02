@@ -34,6 +34,7 @@ private enum HUDColor {
 
 struct HUDView: View {
     @ObservedObject var model: HUDModel
+    @ObservedObject private var hotkeys = HotkeySettings.shared
     var onSize: (CGSize) -> Void = { _ in }
     var onWordTap: (String) -> Void = { _ in }
     var onInput: (String) -> Void = { _ in }
@@ -161,7 +162,7 @@ struct HUDView: View {
                     Text("Нажмите на незнакомое слово")
                         .font(.system(size: 11)).foregroundStyle(HUDColor.tertiary)
                     Spacer(minLength: 4)
-                    key("⌥A", "ещё раз")
+                    key(hotkeys.shortcut(for: .listenBack).display, "ещё раз")
                     key("␛", "закрыть")
                 }
                 .padding(.top, 2)

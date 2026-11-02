@@ -28,11 +28,48 @@ struct Shortcut: Codable, Equatable {
         if event.modifierFlags.contains(.shift) { carbon |= UInt32(shiftKey) }
         if event.modifierFlags.contains(.command) { carbon |= UInt32(cmdKey) }
 
-        // без модификатора сочетание перехватывало бы обычную клавишу во всей системе
-        guard carbon != 0 else { return nil }
+        // без модификатора сочетание перехватывало бы обычную клавишу во всей системе;
+        // исключение — F1–F12: в тексте их не набирают
+        guard carbon != 0 || Self.functionKeys.keys.contains(UInt32(event.keyCode)) else { return nil }
         self.keyCode = UInt32(event.keyCode)
         self.modifiers = carbon
     }
+
+    /// Для пункта меню: тот же символ, что в `display`, и те же модификаторы —
+    /// меню показывает ровно то сочетание, что работает глобально.
+    var menuKeyEquivalent: (key: String, modifiers: NSEvent.ModifierFlags) {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+
+        let key: String
+        if let function = Self.functionKeys[keyCode] {
+            key = String(Character(Unicode.Scalar(function)!))
+        } else if let special = Self.menuSpecialKeys[keyCode] {
+            key = special
+        } else {
+            key = Self.character(for: keyCode)?.lowercased() ?? ""
+        }
+        return (key, flags)
+    }
+
+    private static let functionKeys: [UInt32: Int] = [
+        UInt32(kVK_F1): NSF1FunctionKey, UInt32(kVK_F2): NSF2FunctionKey, UInt32(kVK_F3): NSF3FunctionKey,
+        UInt32(kVK_F4): NSF4FunctionKey, UInt32(kVK_F5): NSF5FunctionKey, UInt32(kVK_F6): NSF6FunctionKey,
+        UInt32(kVK_F7): NSF7FunctionKey, UInt32(kVK_F8): NSF8FunctionKey, UInt32(kVK_F9): NSF9FunctionKey,
+        UInt32(kVK_F10): NSF10FunctionKey, UInt32(kVK_F11): NSF11FunctionKey, UInt32(kVK_F12): NSF12FunctionKey
+    ]
+
+    private static let menuSpecialKeys: [UInt32: String] = [
+        UInt32(kVK_Space): " ", UInt32(kVK_Return): "\r", UInt32(kVK_Escape): "\u{1b}",
+        UInt32(kVK_Tab): "\t", UInt32(kVK_Delete): "\u{8}",
+        UInt32(kVK_LeftArrow): String(Character(Unicode.Scalar(NSLeftArrowFunctionKey)!)),
+        UInt32(kVK_RightArrow): String(Character(Unicode.Scalar(NSRightArrowFunctionKey)!)),
+        UInt32(kVK_UpArrow): String(Character(Unicode.Scalar(NSUpArrowFunctionKey)!)),
+        UInt32(kVK_DownArrow): String(Character(Unicode.Scalar(NSDownArrowFunctionKey)!))
+    ]
 
     static func keyName(_ keyCode: UInt32) -> String {
         if let special = specialKeys[keyCode] { return special }

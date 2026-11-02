@@ -69,7 +69,7 @@ final class SettingsWindow {
             if let shortcut = Shortcut(event: event) {
                 self.model.apply(shortcut, to: action)
             } else {
-                self.model.warning = "Нужен хотя бы один модификатор: ⌥, ⌃, ⌘ или ⇧"
+                self.model.warning = "Нужен хотя бы один модификатор: ⌥, ⌃, ⌘ или ⇧. Без него можно только F1–F12"
             }
             return nil
         }
@@ -137,7 +137,7 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             } else {
-                Text("Клавиши внутри подсказки — ⏎ добавить, P произнести, ␛ закрыть — не меняются: они работают только пока она открыта.")
+                Text("F1–F12 можно назначить и без модификатора; на ноутбуке их нажимают вместе с fn. Клавиши внутри подсказки — ⏎ добавить, P произнести, ␛ закрыть — не меняются: они работают только пока она открыта.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
