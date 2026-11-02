@@ -96,14 +96,19 @@ enum SelectionCapture {
         }
         let changeCountBefore = pb.changeCount
 
+        waitForModifiersRelease()
         sendCommandC()
         // ждём, пока целевое приложение обработает ⌘C
-        let deadline = Date().addingTimeInterval(0.35)
+        let deadline = Date().addingTimeInterval(0.6)
         while pb.changeCount == changeCountBefore, Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
 
-        let result = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // буфер не изменился — копировать было нечего; старое содержимое
+        // буфера к выделению отношения не имеет
+        let result = pb.changeCount == changeCountBefore
+            ? nil
+            : pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let saved {
             pb.clearContents()
@@ -116,8 +121,21 @@ enum SelectionCapture {
         return result
     }
 
+    /// Хоткей срабатывает на нажатие, когда модификаторы (тот же ⌥) ещё
+    /// зажаты. Система подмешивает их к синтетическому ⌘C, и приложение
+    /// получает ⌥⌘C — это уже не «копировать». Поэтому ждём, пока пользователь
+    /// отпустит клавиши, но не дольше полсекунды.
+    private static func waitForModifiersRelease() {
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+        let deadline = Date().addingTimeInterval(0.5)
+        while !CGEventSource.flagsState(.hidSystemState).intersection(modifiers).isEmpty, Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+    }
+
     private static func sendCommandC() {
-        guard let src = CGEventSource(stateID: .combinedSessionState) else { return }
+        // собственное состояние источника — физически зажатые клавиши к событию не примешиваются
+        guard let src = CGEventSource(stateID: .privateState) else { return }
         let key = CGKeyCode(8) // C
         let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
         let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
