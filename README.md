@@ -213,7 +213,7 @@ Wiktionary. Результат навсегда оседает в локальн
 
 ```bash
 ./scripts/make-dmg.sh                                    # build/MrDi-<версия>.dmg
-gh release create v1.3 build/MrDi-1.3.dmg --title "Mr.Di. 1.3"
+gh release create v1.4 build/MrDi-1.4.dmg --title "Mr.Di. 1.4"
 ```
 
 Образ подписывается ad-hoc, а не сертификатом «MrDi Dev»: самоподписанный сертификат
