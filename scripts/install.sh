@@ -17,8 +17,12 @@ if [[ "$(sw_vers -productVersion | cut -d. -f1)" -lt 15 ]]; then
 fi
 
 echo "→ ищу последнюю версию"
-URL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -o '"browser_download_url": *"[^"]*\.dmg"' | head -1 | cut -d'"' -f4)
+RELEASE=$(curl -fsSL --retry 3 "https://api.github.com/repos/$REPO/releases/latest")
+URL=$(grep -o '"browser_download_url": *"[^"]*\.dmg"' <<<"$RELEASE" | head -1 | cut -d'"' -f4 || true)
+# тот же файл через API: когда обычная ссылка на скачивание у GitHub
+# отвечает 504, этот адрес обычно продолжает работать
+API_URL=$(grep -o '"url": *"https://api.github.com/repos/[^"]*/releases/assets/[0-9]*"' <<<"$RELEASE" \
+    | head -1 | cut -d'"' -f4 || true)
 if [[ -z "$URL" ]]; then
     echo "Не нашёл .dmg в последнем релизе: https://github.com/$REPO/releases" >&2
     exit 1
@@ -29,7 +33,11 @@ MOUNT="$TMP/mnt"
 trap 'hdiutil detach "$MOUNT" -quiet 2>/dev/null || true; rm -rf "$TMP"' EXIT
 
 echo "→ скачиваю $(basename "$URL")"
-curl -fL --progress-bar "$URL" -o "$TMP/MrDi.dmg"
+if ! curl -fL --retry 2 --progress-bar "$URL" -o "$TMP/MrDi.dmg"; then
+    [[ -n "$API_URL" ]] || exit 1
+    echo "→ GitHub не отдал файл, пробую другой адрес"
+    curl -fL --retry 3 --progress-bar -H "Accept: application/octet-stream" "$API_URL" -o "$TMP/MrDi.dmg"
+fi
 
 mkdir -p "$MOUNT"
 hdiutil attach "$TMP/MrDi.dmg" -mountpoint "$MOUNT" -nobrowse -quiet
