@@ -45,7 +45,9 @@ final class HUDController {
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         p.isFloatingPanel = true
-        p.level = .statusBar
+        // уровень рамки выделения: полноэкранные просмотрщики (картинка в Telegram)
+        // висят выше обычных окон, и подсказка должна быть поверх них
+        p.level = .screenSaver
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false
