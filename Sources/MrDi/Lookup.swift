@@ -1,10 +1,12 @@
-import Foundation
+import AppKit
 import NaturalLanguage
 
 struct LookupResult {
     var surface: String          // как встретилось в тексте или прозвучало
     var lemma: String            // всегда английская сторона, в словарной форме
     var translation: String      // всегда русская сторона
+    /// Второй вариант от точного режима переводчика, если он расходится с первым.
+    var alternative: String?
     var direction: Direction = .enToRu
     var pos: String?
     var ipa: String?
@@ -103,13 +105,56 @@ enum Lookup {
     }
 
     /// Перевод предложения-контекста — только подсказка о смысле, поэтому идёт следом.
+    /// Целое предложение точный режим переводит заметно лучше, а спешить тут некуда.
     static func contextTranslation(_ context: String?) async -> String? {
         guard let context, context.count < 400 else { return nil }
-        let key = "en-ru-ctx:" + String(context.hashValue)
+        let precise = TranslationBridge.supportsPrecise
+        let key = (precise ? "en-ru-ctx-hq:" : "en-ru-ctx:") + String(context.hashValue)
         if let hit = Store.shared.cached(key) { return hit }
-        guard let translated = try? await TranslationBridge.enToRu.translate(context) else { return nil }
+        let bridge = precise ? TranslationBridge.enToRuPrecise : TranslationBridge.enToRu
+        guard let translated = try? await bridge.translate(context) else { return nil }
         Store.shared.putCache(key, translated)
         return translated
+    }
+
+    /// Второй вариант перевода английского слова — от точного режима.
+    /// nil, если режима нет в системе или он сказал то же самое, что быстрый.
+    static func alternative(for result: LookupResult) async -> String? {
+        guard TranslationBridge.supportsPrecise, result.direction == .enToRu, !result.isPhrase,
+              !result.translation.isEmpty
+        else { return nil }
+        let key = "en-ru-hq:" + result.lemma.lowercased()
+        let precise: String
+        if let hit = Store.shared.cached(key) {
+            precise = hit
+        } else {
+            guard let translated = try? await TranslationBridge.enToRuPrecise.translate(result.lemma) else { return nil }
+            Store.shared.putCache(key, translated)
+            precise = translated
+        }
+        guard !isSameMeaning(result.translation, precise) else { return nil }
+        // точный режим иногда выдумывает слова (handle → «обергать»):
+        // несуществующее слово хуже, чем никакого второго варианта
+        guard await MainActor.run(body: { isRealRussian(precise) }) else { return nil }
+        return precise
+    }
+
+    @MainActor
+    private static func isRealRussian(_ text: String) -> Bool {
+        NSSpellChecker.shared.checkSpelling(of: text, startingAt: 0, language: "ru", wrap: false,
+                                            inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
+    }
+
+    /// Быстрый режим часто перечисляет формы через запятую («Развёртывать, развернуть»):
+    /// если точный назвал одну из них, второй вариант ничего нового не скажет.
+    private static func isSameMeaning(_ fast: String, _ precise: String) -> Bool {
+        func normalized(_ s: String) -> String {
+            s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        }
+        let candidate = normalized(precise)
+        guard !candidate.isEmpty else { return true }
+        let variants = fast.split(whereSeparator: { $0 == "," || $0 == ";" }).map { normalized(String($0)) }
+        return normalized(fast) == candidate || variants.contains(candidate)
     }
 
     static func lemmatize(_ word: String, language: NLLanguage) -> String {

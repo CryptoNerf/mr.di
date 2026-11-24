@@ -26,8 +26,15 @@ final class TranslationBridge {
     static let enToRu = TranslationBridge(direction: .enToRu)
     static let ruToEn = TranslationBridge(direction: .ruToEn)
 
-    static func bridge(for direction: Direction) -> TranslationBridge {
-        direction == .enToRu ? enToRu : ruToEn
+    /// Точный режим переводчика (macOS 26.4+). Быстрый режим работает как словарь
+    /// и на отдельном слове иногда выбирает редкое значение: retry → «судить снова».
+    /// Точный чаще угадывает обиходное («повторить»), но втрое медленнее и порой
+    /// ошибается сам. Поэтому он не заменяет быстрый, а дописывает второй вариант.
+    static let enToRuPrecise = TranslationBridge(direction: .enToRu, precise: true)
+
+    static var supportsPrecise: Bool {
+        if #available(macOS 26.4, *) { return true }
+        return false
     }
 
     struct Job {
@@ -38,11 +45,13 @@ final class TranslationBridge {
     enum Failure: Error { case unavailable }
 
     let direction: Direction
+    let precise: Bool
     private let stream: AsyncStream<Job>
     private let continuation: AsyncStream<Job>.Continuation
 
-    private init(direction: Direction) {
+    private init(direction: Direction, precise: Bool = false) {
         self.direction = direction
+        self.precise = precise
         var c: AsyncStream<Job>.Continuation!
         stream = AsyncStream(bufferingPolicy: .unbounded) { c = $0 }
         continuation = c
@@ -58,7 +67,7 @@ final class TranslationBridge {
     func serve(session: TranslationSession) async {
         // языковой пакет скачиваем заранее только для основного направления:
         // ради обратного не стоит показывать пользователю загрузку на старте
-        if direction == .enToRu {
+        if direction == .enToRu, !precise {
             try? await session.prepareTranslation()
         }
         for await job in stream {
@@ -93,8 +102,11 @@ enum TranslationHostWindow {
         w.alphaValue = 0
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         w.contentView = NSHostingView(rootView: ZStack {
-            TranslationHost(direction: .enToRu)
-            TranslationHost(direction: .ruToEn)
+            TranslationHost(bridge: .enToRu)
+            TranslationHost(bridge: .ruToEn)
+            if TranslationBridge.supportsPrecise {
+                TranslationHost(bridge: .enToRuPrecise)
+            }
         })
         w.setFrameOrigin(NSPoint(x: -200, y: 0))
         w.orderFrontRegardless()
@@ -104,22 +116,28 @@ enum TranslationHostWindow {
 
 /// Невидимая вью-подложка, к которой прицеплена сессия перевода.
 struct TranslationHost: View {
-    private let direction: Direction
+    private let bridge: TranslationBridge
     @State private var configuration: TranslationSession.Configuration
 
-    init(direction: Direction) {
-        self.direction = direction
-        _configuration = State(initialValue: TranslationSession.Configuration(
-            source: Locale.Language(identifier: direction.source),
-            target: Locale.Language(identifier: direction.target)
-        ))
+    init(bridge: TranslationBridge) {
+        self.bridge = bridge
+        let source = Locale.Language(identifier: bridge.direction.source)
+        let target = Locale.Language(identifier: bridge.direction.target)
+        if #available(macOS 26.4, *) {
+            // режим задаём явно и для быстрых сессий: умолчание системы может поменяться
+            _configuration = State(initialValue: TranslationSession.Configuration(
+                source: source, target: target,
+                preferredStrategy: bridge.precise ? .highFidelity : .lowLatency))
+        } else {
+            _configuration = State(initialValue: TranslationSession.Configuration(source: source, target: target))
+        }
     }
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .translationTask(configuration) { session in
-                await TranslationBridge.bridge(for: direction).serve(session: session)
+                await bridge.serve(session: session)
             }
     }
 }

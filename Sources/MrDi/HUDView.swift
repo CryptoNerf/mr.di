@@ -184,10 +184,12 @@ struct HUDView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     // перевод целого абзаца крупным жирным шрифтом читается тяжело
                     // и занимает пол-экрана, поэтому длинный текст мельче
-                    Text(r.primary)
+                    // второй вариант от точного режима — рядом и тем же размером, но тише:
+                    // переводчик не знает, какое из значений имелось в виду
+                    (Text(r.primary).foregroundStyle(HUDColor.primary)
+                     + Text(r.alternative.map { "  ·  " + $0 } ?? "").foregroundStyle(HUDColor.secondary))
                         .font(.system(size: r.primary.count > 60 ? 15 : 20,
                                       weight: r.primary.count > 60 ? .regular : .semibold))
-                        .foregroundStyle(HUDColor.primary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     // при вопросе по-русски английское слово стоит здесь,

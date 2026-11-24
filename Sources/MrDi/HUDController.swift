@@ -180,10 +180,17 @@ final class HUDController {
                     return
                 }
 
-                // словарная статья и перевод предложения догоняют перевод слова
-                async let article = result.isPhrase ? nil : DictionaryService.entry(for: result.lemma)
+                // словарная статья, второй вариант и перевод предложения догоняют перевод слова
+                let base = result
+                async let article = base.isPhrase ? nil : DictionaryService.entry(for: base.lemma)
+                async let alternative = Lookup.alternative(for: base)
                 async let sentence = Lookup.contextTranslation(capture.context)
 
+                if let alternative = await alternative, !Task.isCancelled, isVisible {
+                    result.alternative = alternative
+                    current = result
+                    model.state = .result(result)
+                }
                 if let article = await article, !Task.isCancelled, isVisible {
                     result.ipa = article.ipa
                     result.senses = article.senses
@@ -425,7 +432,9 @@ final class HUDController {
     }
 
     private func saveCurrent() {
-        guard let r = current else { return }
+        guard var r = current else { return }
+        // в карточку уходят оба варианта: какой из них верный, решает человек
+        if let alternative = r.alternative { r.translation += "; " + alternative }
         Store.shared.save(r)
         model.alreadySaved = true
         model.justSaved = true

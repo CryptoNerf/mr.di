@@ -79,6 +79,18 @@ final class Store {
               key TEXT PRIMARY KEY, value TEXT NOT NULL, at REAL NOT NULL
             );
             """)
+        resetTranslationCacheIfNeeded()
+    }
+
+    /// Кэш переводов вечный, поэтому смена режима переводчика сама до него не дойдёт:
+    /// слово, однажды переведённое как «судить снова», так бы и осталось.
+    /// Номер поднимается при каждой такой смене; словарные статьи не трогаем.
+    private func resetTranslationCacheIfNeeded() {
+        let version = 2   // 2 — быстрый режим задан явно, рядом второй вариант из точного
+        let key = "mrdi.translationCacheVersion"
+        guard UserDefaults.standard.integer(forKey: key) < version else { return }
+        exec("DELETE FROM cache WHERE key LIKE 'en-ru%' OR key LIKE 'ru-en%';")
+        UserDefaults.standard.set(version, forKey: key)
     }
 
     /// Добавление колонки в уже существующую базу пользователя.
