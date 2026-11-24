@@ -14,7 +14,7 @@ final class HUDController {
     private var hideWorkItem: DispatchWorkItem?
     private(set) var isVisible = false
 
-    private let panelWidth: CGFloat = 400
+    private let panelWidth: CGFloat = 420
     private var contentHeight: CGFloat = 120
     private var anchor: NSPoint = .zero
     private var lastTranscript: String?
@@ -98,6 +98,12 @@ final class HUDController {
             case KeyCode.p:
                 DispatchQueue.main.async { self.speakCurrent() }
                 return true
+            // только голая C: ⌘C в приложении под подсказкой должен работать как обычно
+            case KeyCode.c where self.current != nil
+                && CGEventSource.flagsState(.combinedSessionState)
+                    .intersection([.maskCommand, .maskControl, .maskAlternate]).isEmpty:
+                DispatchQueue.main.async { self.copyCurrent() }
+                return true
             default:
                 return false
             }
@@ -120,6 +126,7 @@ final class HUDController {
         current = nil
         lastTranscript = text
         model.justSaved = false
+        model.justCopied = false
         model.state = .transcript(text)
         setInteractive(true)
         show(at: anchor)
@@ -137,6 +144,7 @@ final class HUDController {
         setInteractive(false)
         current = nil
         model.justSaved = false
+        model.justCopied = false
         model.state = .loading(capture.text)
         model.seenCount = 0
         model.alreadySaved = false
@@ -160,6 +168,7 @@ final class HUDController {
                 current = result
                 if isTyping { typingQuery = capture.text }
                 model.justSaved = false
+                model.justCopied = false
                 model.state = .result(result)
                 NotificationCenter.default.post(name: .mrdiLookupSucceeded, object: nil)
                 model.alreadySaved = Store.shared.isSaved(lemma: result.lemma.lowercased())
@@ -238,6 +247,7 @@ final class HUDController {
         typingQuery = ""
         saveWhenReady = false
         model.justSaved = false
+        model.justCopied = false
         model.alreadySaved = false
         model.seenCount = 0
         model.input = ""
@@ -309,11 +319,20 @@ final class HUDController {
 
     /// У приложения нет главного меню, а без него ⌘V, ⌘C, ⌘A и ⌘Z
     /// в текстовом поле не работают. Отдаём их полю сами.
+    ///
+    /// ⌘C без выделения в поле копирует перевод: набрал русское слово —
+    /// забрал английское, не трогая мышь.
     private func installEditMonitor() {
         guard editMonitor == nil else { return }
-        editMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        editMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .subtracting([.capsLock, .numericPad, .function])
+            if Int(event.keyCode) == kVK_ANSI_C, flags == .command,
+               let self, self.current != nil,
+               ((NSApp.keyWindow?.firstResponder as? NSTextView)?.selectedRange().length ?? 0) == 0 {
+                self.copyCurrent()
+                return nil
+            }
             let action: Selector?
             switch (Int(event.keyCode), flags) {
             case (kVK_ANSI_V, .command): action = #selector(NSText.paste(_:))
@@ -392,6 +411,17 @@ final class HUDController {
     private func speakCurrent() {
         guard let r = current else { return }
         Speaker.speak(r.lemma)   // lemma всегда английская сторона, в любом направлении
+    }
+
+    /// В буфер уходит то, чего пользователь не знал: перевод, а при вопросе
+    /// по-русски — английское слово.
+    private func copyCurrent() {
+        guard let r = current else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(r.primary, forType: .string)
+        model.justCopied = true
+        scheduleAutoHide(after: 0.7)
     }
 
     private func saveCurrent() {

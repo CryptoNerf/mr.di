@@ -18,6 +18,7 @@ final class HUDModel: ObservableObject {
     @Published var typingSession = 0
     @Published var alreadySaved = false
     @Published var justSaved = false
+    @Published var justCopied = false
     @Published var seenCount = 0
     @Published var listenHint = ""
 }
@@ -50,13 +51,13 @@ struct HUDView: View {
                     if model.isTyping { typingContent } else { content }
                 }
                     .padding(16)
-                    .frame(width: 380, alignment: .leading)
+                    .frame(width: 400, alignment: .leading)
                     // не preference: изнутри ScrollView на macOS он наружу не доходит,
                     // и панель оставалась высотой с «загрузку»
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .frame(width: 380)
+            .frame(width: 400)
             .background {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.ultraThinMaterial)
@@ -88,7 +89,7 @@ struct HUDView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(HUDColor.accent)
                 TextField("", text: $model.input,
-                          prompt: Text("Слово или фраза по-русски или по-английски")
+                          prompt: Text("Слово по-русски или по-английски")
                             .foregroundStyle(HUDColor.tertiary))
                     .textFieldStyle(.plain)
                     .font(.system(size: 18, weight: .medium))
@@ -286,18 +287,27 @@ struct HUDView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if model.justSaved {
                 Label("В словаре", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 11)).foregroundStyle(.green)
+                    .fixedSize()
             } else if model.alreadySaved {
-                Label("Уже в словаре", systemImage: "checkmark")
+                Label("В словаре", systemImage: "checkmark")
                     .font(.system(size: 11)).foregroundStyle(HUDColor.secondary)
+                    .fixedSize()
             } else {
                 key("⏎", "добавить")
             }
             Spacer(minLength: 4)
-            // при вводе буква P нужна полю, поэтому произношение — через ⌘
+            // при вводе буквы нужны полю, поэтому копирование и произношение — через ⌘
+            if model.justCopied {
+                Label("Скопировано", systemImage: "doc.on.doc.fill")
+                    .font(.system(size: 11)).foregroundStyle(.green)
+                    .fixedSize()
+            } else {
+                key(model.isTyping ? "⌘C" : "C", "копировать")
+            }
             key(model.isTyping ? "⌘P" : "P", "произнести")
             key("␛", "закрыть")
         }
@@ -313,6 +323,7 @@ struct HUDView: View {
                 .foregroundStyle(HUDColor.secondary)
             Text(label).font(.system(size: 11)).foregroundStyle(HUDColor.tertiary)
         }
+        .fixedSize()   // подпись «копиро-вать», разорванная переносом, читается хуже, чем никакая
     }
 
     /// Каждое слово расшифровки — ссылка: клик по нему открывает обычный перевод слова,
