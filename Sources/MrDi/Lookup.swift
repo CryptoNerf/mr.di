@@ -93,15 +93,31 @@ enum Lookup {
             }
         }
 
-        let lemma = isPhrase ? english : lemmatize(english, language: .english)
+        let headword = isPhrase ? english : englishHeadword(english)
+        let englishPhrase = headword.contains(" ")
+        let lemma = englishPhrase ? headword : lemmatize(headword, language: .english)
         let russian = isPhrase ? surface : lemmatize(surface, language: .russian)
         if record { Store.shared.recordLookup(lemma: lemma.lowercased(), mode: mode) }
 
         return .success(LookupResult(surface: surface, lemma: lemma, translation: russian,
                                      direction: .ruToEn,
-                                     pos: isPhrase ? nil : partOfSpeech(english),
+                                     pos: englishPhrase ? nil : partOfSpeech(headword, in: english),
                                      ipa: nil, context: capture.context,
-                                     source: capture.sourceApp, isPhrase: isPhrase))
+                                     source: capture.sourceApp, isPhrase: englishPhrase))
+    }
+
+    /// Глагол в личной форме переводчик отдаёт с местоимением: «бегу» → «I run»,
+    /// «прокрастинирую» → «I procrastinate», а инфинитив — с «to». Для одного
+    /// русского слова нужно одно английское, иначе в словарь попадёт «I».
+    /// Что осталось после местоимения — то и слово: «I give up» → «give up».
+    static func englishHeadword(_ english: String) -> String {
+        let leading: Set<String> = ["i", "you", "he", "she", "it", "we", "they", "to",
+                                    "i'm", "you're", "he's", "she's", "it's", "we're", "they're",
+                                    "i’m", "you’re", "he’s", "she’s", "it’s", "we’re", "they’re"]
+        var words = english.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            .split(separator: " ").map(String.init)
+        while words.count > 1, leading.contains(words[0].lowercased()) { words.removeFirst() }
+        return words.joined(separator: " ")
     }
 
     /// Перевод предложения-контекста — только подсказка о смысле, поэтому идёт следом.
@@ -166,11 +182,15 @@ enum Lookup {
         return word
     }
 
-    static func partOfSpeech(_ word: String) -> String? {
+    /// `phrase` — перевод, из которого взято слово: «procrastinate» в одиночку
+    /// теггер считает существительным, а в «I procrastinate» видит глагол.
+    static func partOfSpeech(_ word: String, in phrase: String? = nil) -> String? {
+        let text = phrase ?? word
         let tagger = NLTagger(tagSchemes: [.lexicalClass])
-        tagger.string = word
-        tagger.setLanguage(.english, range: word.startIndex..<word.endIndex)
-        let (tag, _) = tagger.tag(at: word.startIndex, unit: .word, scheme: .lexicalClass)
+        tagger.string = text
+        tagger.setLanguage(.english, range: text.startIndex..<text.endIndex)
+        let at = text.range(of: word, options: [.caseInsensitive, .backwards])?.lowerBound ?? text.startIndex
+        let (tag, _) = tagger.tag(at: at, unit: .word, scheme: .lexicalClass)
         switch tag {
         case .noun?: return "сущ."
         case .verb?: return "гл."
